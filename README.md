@@ -165,8 +165,9 @@ It is a receptionist for a software studio. It can:
   from a knowledge base of 16 FAQs
 - **Never quote a price.** Pricing depends on scope and is deliberately deferred
   to a call
-- **Book a callback**, collecting name, contact, day and time on the call, then
-  writing it to CSV
+- **Book a callback**, collecting name, day and time on the call, then writing it
+  to CSV. It never asks for a phone number or email: on a phone call we already
+  have the number and it is recorded automatically.
 - Take a message when no time is agreed
 - Speak English, Hindi and Hinglish, matching whatever the caller uses
 
@@ -227,23 +228,64 @@ Any of these override the profile:
 TTS_PROVIDER=deepgram | rumik | cartesia
 TTS_MODEL=...            # defaults per provider, so usually leave it unset
 STT_MODEL=flux-general-multi | flux-general-en | nova-3
-LLM_MODEL=openai/gpt-oss-120b | llama-3.3-70b-versatile | ...
+LLM_MODEL=openai/gpt-oss-120b | openai/gpt-oss-20b
 ```
 
 Each provider has its own default model, so `TTS_PROVIDER=rumik` alone is enough.
 
+`pricing.py` carries rates for both `gpt-oss` models. Any other model the Groq
+plugin accepts will run, but the session summary reports it as unpriced until
+you add a rate for it.
+
+### Voice
+
+```bash
+RUMIK_SPEAKER=ira        # default. female: emma mia sophia ava ira siya aisha zoya
+                         #          male:   lucas noah theo adam
+RUMIK_DESCRIPTION=...    # alternative: describe a voice in words instead
+```
+
+**Rumik must always be pinned to a voice, and the code makes sure it is.** If
+neither `speaker` nor `description` is sent, Rumik generates a voice from
+scratch, and because those fields go out on every request the voice changes
+between utterances. In testing that produced an English greeting in a female
+voice and the next Hindi reply in a male one. A misspelled speaker name has the
+same effect, so the code warns when it does not recognise one.
+
 ### Turn-taking
 
 ```bash
-TURN_DETECTION=auto        # auto | stt | vad | livekit
-INTERRUPTION_MODE=auto     # auto | vad | adaptive
-STT_EOT_THRESHOLD=0.7      # 0.5-0.9. Lower replies sooner, risks cutting people off
+TURN_DETECTION=auto             # auto | stt | vad | livekit
+INTERRUPTION_MODE=auto          # auto | vad | adaptive
+STT_EOT_THRESHOLD=0.7           # 0.5-0.9. Lower replies sooner, risks cutting people off
+STT_EAGER_EOT_THRESHOLD=0.4     # early signal so the LLM starts sooner. 0 disables
+LLM_MAX_TOKENS=200              # cap reply length
 ```
 
 `auto` picks whatever needs no LiveKit credentials, so console mode works
 standalone. With Flux that means `stt`, which is also the fastest option.
 
 `STT_EOT_THRESHOLD` is the dial that most changes how the conversation *feels*.
+
+**`STT_EAGER_EOT_THRESHOLD` is the biggest latency lever here.** Deepgram signals
+a likely end of turn at this confidence, so the LLM starts generating before the
+caller has finished and the reply is often already streaming by the time they
+stop. The plugin leaves it **off** unless set. It must be less than or equal to
+`STT_EOT_THRESHOLD`, and lower values start sooner at the cost of more discarded
+speculative work.
+
+`LLM_MAX_TOKENS` caps reply length. A rambling answer is slow to generate and
+slow to speak, which on a call reads as the agent being sluggish.
+
+### Storage
+
+```bash
+DATA_DIR=./data          # leads.csv and transcripts/ land here
+SAVE_TRANSCRIPTS=true
+USD_INR=88               # only affects the rupee figure in the cost summary
+```
+
+The full list of every variable is in `.env.example`.
 
 ---
 
@@ -296,7 +338,7 @@ When a call ends - caller hangs up, the LiveKit console stops the session, or
 
 Token counts and audio durations come from LiveKit's own `session.usage`, not
 from estimates. Prices are provider list rates in `src/voice_agent/pricing.py`,
-each annotated with its source and the date checked:
+each annotated with its source and the date checked (currently 2026-08-19):
 
 | Model | Rate | Source |
 |---|---|---|
@@ -330,6 +372,7 @@ voice-agent/
 │   ├── main.py                AgentServer, prewarm, job entrypoint
 │   ├── session.py             pipeline decisions: turn detection, interruption
 │   ├── config.py              env -> typed Settings, fails loudly and early
+│   ├── pricing.py             list prices, each with source and date checked
 │   ├── providers/             the ONLY place models are constructed
 │   │   ├── stt.py             picks STTv2 for Flux models, STT otherwise
 │   │   ├── llm.py
@@ -338,13 +381,16 @@ voice-agent/
 │   ├── agents/receptionist.py the agent: instructions + @function_tool methods
 │   ├── prompts/receptionist.md behaviour, as an editable template
 │   ├── business/
+│   │   ├── profile.py         loads the two JSON files below
 │   │   ├── profile.json       facts about the business
 │   │   └── faq.json           16 spoken-style Q&A pairs
 │   ├── storage/
 │   │   ├── leads.py           CSV append, locked, schema-rotating
 │   │   └── transcripts.py     per-call JSON
-│   └── observability/metrics.py  per-turn latency breakdown
-└── tests/                     61 tests, no network calls
+│   └── observability/
+│       ├── metrics.py         per-turn latency breakdown
+│       └── usage.py           session cost summary, printed on hangup
+└── tests/                     82 tests, no network calls
 ```
 
 **The one structural rule:** models are constructed in `providers/` and nowhere
@@ -382,7 +428,7 @@ the type hints become the argument schema. See `book_callback`.
 ## Development
 
 ```bash
-uv run pytest          # 61 tests, no network calls
+uv run pytest          # 82 tests, no network calls
 uv run ruff check .    # lint
 ```
 
