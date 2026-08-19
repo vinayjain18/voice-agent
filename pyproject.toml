@@ -1,0 +1,37 @@
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "Low-latency live voice agent (LiveKit Agents + Deepgram Flux + Groq + swappable TTS)"
+readme = "README.md"
+authors = [
+    { name = "Vinay Jain", email = "vinayjain449@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "livekit-agents[silero,turn-detector]~=1.6",
+    "livekit-plugins-cartesia>=1.6.10",
+    "livekit-plugins-deepgram>=1.6.10",
+    "livekit-plugins-groq>=1.6.10",
+    "livekit-plugins-rumik-ai>=0.2.2",
+    "python-dotenv>=1.2.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+asyncio_mode = "auto"

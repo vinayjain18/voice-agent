@@ -1,0 +1,69 @@
+{
+  "_comment": "DEMO CONTENT. Answers are written to be spoken aloud: short, no lists, no markup.",
+  "faqs": [
+    {
+      "q": "What do you build?",
+      "a": "Six things really: AI agents and voice assistants, workflow automation, websites, mobile apps, custom software and full SaaS products. Most clients come to us for one and end up doing two."
+    },
+    {
+      "q": "What have you built before, and for whom?",
+      "a": "Our own product Karyalo is a contract management tool for legal teams. We also built Cloei, an AI sales assistant that handles car finance leads over SMS for a UK company called ChooseMyCar. And a mobile app for clinicians at a UK based health-tech startup."
+    },
+    {
+      "q": "Can you tell me more about the car finance one?",
+      "a": "That was Cloei for ChooseMyCar. Every new lead gets a text within seconds, day or night. She talks through finance options, handles objections, chases people who go quiet, and books callbacks so the sales team only speaks to warm customers."
+    },
+    {
+      "q": "How much do you charge?",
+      "a": "It really depends on the scope, so I would not want to give you a number that turns out to be wrong. What we normally do is a short call to understand what you need, then send a written quotation with a fixed price and timeline. Shall I get that booked in for you?"
+    },
+    {
+      "q": "Can you give me a rough idea of budget?",
+      "a": "I can tell you how it works rather than a figure. Everything is fixed price against a written scope, paid in milestones, usually forty percent to start. Once Vinay understands the scope on a call he can give you a real number, normally within a couple of days."
+    },
+    {
+      "q": "How long does a project take?",
+      "a": "A marketing site is usually two to four weeks. An AI agent or an automation is around four to eight weeks. A full product is three months or more, but we ship it in stages so you have something working early."
+    },
+    {
+      "q": "How big is the team?",
+      "a": "Small and hand-picked. Designers, engineers and AI specialists, led by Vinay Jain, our Co-founder. That is deliberate. It is why we move in weeks rather than quarters."
+    },
+    {
+      "q": "Where are you based?",
+      "a": "Mumbai, India. We work with clients in India, the UK and the US, so we are used to working across time zones."
+    },
+    {
+      "q": "How do you work? What is the process?",
+      "a": "Four steps. A short discovery call, then a written scope with a fixed price, then we build with weekly demos so you always see progress, then launch and handover with a support window."
+    },
+    {
+      "q": "What technology do you use?",
+      "a": "Mostly Python and FastAPI on the backend, Next.js and React on the front, React Native for mobile, and AWS for hosting. For AI work we pick the model that fits rather than tying ourselves to one provider."
+    },
+    {
+      "q": "What happens after launch?",
+      "a": "Every launch comes with thirty days of support for any fixes. After that most clients keep us on a small monthly retainer for maintenance and improvements, but there is no obligation."
+    },
+    {
+      "q": "Do you sign an NDA? Who owns the code?",
+      "a": "Yes, we sign NDAs as a matter of course. And you own all the code and the intellectual property once the final payment is made. It is your product, not ours."
+    },
+    {
+      "q": "Do you work with startups or only big companies?",
+      "a": "Mostly founders and small teams, honestly. That is who benefits most from moving quickly."
+    },
+    {
+      "q": "How do we get started?",
+      "a": "The easiest way is a quick call with Vinay. I can set that up for you right now if you like. What day suits you?"
+    },
+    {
+      "q": "Can you take over a project someone else started?",
+      "a": "Often yes. We would want to look at the existing code first and be honest with you about whether continuing or rebuilding is the better use of your money."
+    },
+    {
+      "q": "Do you do only AI, or normal development too?",
+      "a": "Both, equally. AI is what people ask about most right now, but a good chunk of our work is straightforward web, mobile and custom software."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "_comment": "DEMO CONTENT. Grounded in real WebsiNova work (Karyalo, Cloei/ChooseMyCar) but written for a portfolio demo. Review every line before this is ever used with a real prospect.",
+  "business_name": "WebsiNova Technologies",
+  "agent_name": "Nova",
+  "industry": "software development studio",
+  "location": "Mumbai, India",
+  "hours": "Monday to Friday, 10am to 7pm India time",
+  "founded": "We have been building products together since 2021.",
+  "team": "A small hand-picked team of designers, engineers and AI specialists, led by Vinay Jain, Co-founder.",
+  "services": [
+    "AI agents and voice assistants",
+    "Workflow automation",
+    "Web development",
+    "Mobile apps",
+    "Custom software",
+    "SaaS products"
+  ],
+  "value_proposition": "Speed. Most studios quote in quarters; we ship in weeks, because the team is small and senior enough not to need layers of handover.",
+  "tech_stack": "Python, FastAPI, Next.js, React, React Native, TypeScript, Node, Postgres, MongoDB, and AWS. For AI work we use the major model providers rather than betting on one.",
+  "process": "Four steps. A short discovery call, then a written scope with a fixed price and timeline, then build in weekly demos so you see progress, then launch with a handover and a support window.",
+  "engagement_model": "Most projects are fixed scope and fixed price, paid in milestones, typically forty percent to start and the rest on agreed checkpoints. Longer programmes can run as a monthly retainer.",
+  "pricing_policy": "Pricing depends entirely on scope, so we do not quote on a first call. After a short discovery conversation we send a written quotation with a fixed price and timeline. Most engagements start with a paid discovery if the scope is unclear.",
+  "timelines": "A marketing site is usually two to four weeks. A working AI agent or automation is typically four to eight weeks. A full product build runs three months or more, shipped in stages so you have something usable early.",
+  "support": "Every launch includes a thirty day support window for fixes. After that most clients move to a small monthly retainer for maintenance, monitoring and improvements.",
+  "confidentiality": "We sign NDAs as a matter of course, and the client owns all the code and IP on final payment.",
+  "clients_summary": "We work with founders and small teams in India, the UK and the US, across legal tech, car finance, healthcare and direct to consumer retail.",
+  "case_studies": [
+    "Karyalo, our own contract management product for law firms and in-house legal teams. It handles drafting, clause review against a firm's own playbook, and signature, all in one record. It is live at karyalo.in.",
+    "Cloei, an AI SMS sales assistant we built for ChooseMyCar, a UK car finance company. It texts every new lead within seconds, holds a real conversation about finance, handles objections and books warm callbacks. Built on Python, FastAPI, MongoDB, AWS Bedrock and Twilio.",
+    "A cross-platform mobile app for a UK based health-tech startup, for clinicians visiting patients at home. Offline-first, so it keeps working when the signal drops and syncs when it returns. In both app stores nine weeks after kickoff.",
+    "An operations automation programme for a direct to consumer retail brand, replacing manual order and inventory handling."
+  ],
+  "booking_link": "https://cal.com/vinay-jain",
+  "contact_email": "hello@websinova.com",
+  "escalation_contact": "Vinay Jain, Co-founder",
+  "languages": "English and Hindi, including natural Hinglish code-switching"
+}
