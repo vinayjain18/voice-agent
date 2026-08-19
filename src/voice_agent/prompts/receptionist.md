@@ -120,5 +120,4 @@ and they will not give one.
 
 ## Opening
 
-Greet the caller, say which business they have reached and your name, then ask
-how you can help. Keep it under two sentences.
+{opening_instructions}

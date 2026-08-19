@@ -13,6 +13,7 @@ scope and not inside a function.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -84,8 +85,25 @@ server.setup_fnc = setup
 
 
 @server.rtc_session()
+def _is_outbound(ctx: JobContext) -> bool:
+    """Outbound calls carry direction in the dispatch metadata (see make_call.py).
+
+    Never raises: a malformed metadata string must not stop a call, it just
+    means we greet as if the caller dialled in.
+    """
+    raw = getattr(ctx.job, "metadata", "") or ""
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        return json.loads(raw).get("direction") == "outbound"
+    except (ValueError, AttributeError):
+        logger.warning("could not parse job metadata: %r", raw)
+        return False
+
+
 async def entrypoint(ctx: JobContext) -> None:
     settings = Settings.load()
+    outbound = _is_outbound(ctx)
 
     # Reuse the VAD loaded in setup() so the model load stays off the critical
     # path of this call.
@@ -95,7 +113,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     started_at = time.monotonic()
 
-    await session.start(ReceptionistAgent(settings=settings), room=ctx.room)
+    await session.start(
+        ReceptionistAgent(settings=settings, outbound=outbound), room=ctx.room
+    )
     await ctx.connect()
 
     async def _on_shutdown() -> None:
@@ -131,6 +151,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Let the model produce the greeting from its own instructions rather than
     # hardcoding a line here, so the opening stays in the prompt where it can be
     # edited without a code change.
+    logger.info("call direction: %s", "outbound" if outbound else "inbound")
     await session.generate_reply(
-        instructions="Greet the caller according to your opening instructions."
+        instructions="Open the call according to your opening instructions."
     )

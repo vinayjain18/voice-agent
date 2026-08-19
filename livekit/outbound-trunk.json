@@ -1,0 +1,7 @@
+{
+  "trunk": {
+    "name": "plivo-outbound",
+    "address": "28679355203738201.zt.plivo.com",
+    "numbers": ["+16812186444"]
+  }
+}

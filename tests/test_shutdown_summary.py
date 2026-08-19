@@ -47,6 +47,7 @@ async def _run_entrypoint():
 
     ctx = MagicMock()
     ctx.room.name = "call-test"
+    ctx.job.metadata = ""  # inbound
     ctx.connect = AsyncMock()
     ctx.proc.userdata = {}
     registered = []

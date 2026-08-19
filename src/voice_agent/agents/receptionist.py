@@ -19,11 +19,25 @@ logger = logging.getLogger(__name__)
 BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
 
 
+INBOUND_OPENING = """Greet the caller, say which business they have reached and
+your name, then ask how you can help. Keep it under two sentences."""
+
+OUTBOUND_OPENING = """You placed this call, so they are not expecting you. Open
+by saying your name and the business, say briefly why you are calling, and ask
+if it is a good moment to talk. Keep it under two sentences.
+
+If they say it is a bad time, offer to call back and ask when suits them. Do not
+push."""
+
+
 def build_prompt_variables(
-    profile: BusinessProfile, settings: Settings
+    profile: BusinessProfile, settings: Settings, *, outbound: bool = False
 ) -> dict[str, str]:
     """Business facts plus the things only known at call time."""
     variables = profile.as_prompt_vars()
+    variables["opening_instructions"] = (
+        OUTBOUND_OPENING if outbound else INBOUND_OPENING
+    )
 
     # The model has no idea what today is. Without this it invents dates when a
     # caller says "next Tuesday", confidently and wrongly.
@@ -43,13 +57,19 @@ class ReceptionistAgent(Agent):
         self,
         profile: BusinessProfile | None = None,
         settings: Settings | None = None,
+        *,
+        outbound: bool = False,
     ) -> None:
         self.profile = profile or load_profile()
         self.settings = settings or Settings.load()
+        self.outbound = outbound
 
         super().__init__(
             instructions=render_prompt(
-                "receptionist", build_prompt_variables(self.profile, self.settings)
+                "receptionist",
+                build_prompt_variables(
+                    self.profile, self.settings, outbound=outbound
+                ),
             )
         )
 
