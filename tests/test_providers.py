@@ -78,3 +78,31 @@ async def test_build_session_threads_prewarmed_vad_through(monkeypatch):
     sentinel = object()
     session = session_module.build_session(Settings.load(), vad=sentinel)
     assert session is not None
+
+
+def test_rumik_voice_is_always_pinned(monkeypatch):
+    """Unpinned mulberry generates a new voice per utterance - the drift bug."""
+    monkeypatch.setenv("RUMIK_API_KEY", "test-key")
+    from voice_agent.providers.tts import RUMIK_DEFAULT_SPEAKER, RUMIK_FEMALE_VOICES
+
+    tts = build_tts(TTSSettings(provider="rumik", model="mulberry"))
+    assert tts._opts.speaker == RUMIK_DEFAULT_SPEAKER
+    assert RUMIK_DEFAULT_SPEAKER in RUMIK_FEMALE_VOICES
+
+
+def test_rumik_speaker_override_is_normalised(monkeypatch):
+    monkeypatch.setenv("RUMIK_API_KEY", "test-key")
+    tts = build_tts(
+        TTSSettings(provider="rumik", model="mulberry", rumik_speaker="Emma")
+    )
+    assert tts._opts.speaker == "emma"
+
+
+def test_rumik_description_replaces_the_default_speaker(monkeypatch):
+    monkeypatch.setenv("RUMIK_API_KEY", "test-key")
+    tts = build_tts(
+        TTSSettings(
+            provider="rumik", model="mulberry", rumik_description="warm Indian woman"
+        )
+    )
+    assert tts._opts.description == "warm Indian woman"

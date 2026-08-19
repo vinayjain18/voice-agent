@@ -66,7 +66,6 @@ class ReceptionistAgent(Agent):
         self,
         context: RunContext,
         name: str,
-        phone_or_email: str,
         preferred_date: str,
         preferred_time: str,
         reason: str,
@@ -74,32 +73,38 @@ class ReceptionistAgent(Agent):
     ) -> str:
         """Book a call with the team at a specific date and time.
 
-        Call this ONLY once you have all of: the caller's name, a phone number
-        or email, and a date and time they want the call.
+        This is the tool you should be aiming for in almost every conversation.
+        Call it once you have the caller's name, a day AND a time.
+
+        Never ask for a phone number or an email. We already have the caller's
+        number from the call itself and it is recorded automatically.
 
         Args:
             name: The caller's name.
-            phone_or_email: How to reach them.
             preferred_date: The date as YYYY-MM-DD. Work it out from today's
                 date given in your instructions - never guess the year.
-            preferred_time: 24-hour HH:MM in India time, e.g. "15:00".
+            preferred_time: 24-hour HH:MM in India time, e.g. "15:00". Required.
+                If the caller has only given a day, ask what time suits them
+                before calling this.
             reason: A one-line summary of what they want to discuss.
             raw_request: What the caller actually said about timing, e.g.
                 "next Tuesday afternoon", so a human can double-check.
         """
-        missing = _missing_contact_fields(name, phone_or_email)
-        if missing:
+        room_name, caller = _call_identity()
+
+        if not (name or "").strip():
+            return "Do not save yet - ask the caller for their name, then call this tool again."
+        if not (preferred_time or "").strip():
             return (
-                f"Do not save yet - still missing the caller's {missing}. "
-                f"Ask for it, then call this tool again."
+                "Do not save yet - no time was given. Ask what time of day suits "
+                "them, then call this tool again."
             )
 
-        room_name, caller = _call_identity()
         append_lead(
             self.settings.storage.leads_file,
             kind="booking",
             name=name,
-            contact=phone_or_email,
+            contact=caller,
             reason=reason,
             preferred_date=preferred_date,
             preferred_time=preferred_time,
@@ -114,55 +119,48 @@ class ReceptionistAgent(Agent):
 
     @function_tool
     async def take_callback_details(
-        self, context: RunContext, name: str, phone_or_email: str, reason: str
+        self,
+        context: RunContext,
+        name: str,
+        reason: str,
+        why_no_time: str,
     ) -> str:
-        """Record a caller's details when no specific time was agreed.
+        """Fallback only. Take a message when no time could be agreed.
 
-        Use book_callback instead whenever the caller will give you a date and
-        time. Use this one only for "just have someone call me" or to leave a
-        message.
+        Do NOT use this as your first choice. Use book_callback instead. Only
+        use this after you have actually asked the caller for a day and a time
+        and they would not or could not give one.
 
-        Call this ONLY once you have both the caller's name and a phone number
-        or email.
+        Never ask for a phone number or an email.
 
         Args:
             name: The caller's name.
-            phone_or_email: How to reach them back.
             reason: A one-line summary of what they need.
+            why_no_time: What the caller said when you asked for a time, e.g.
+                "wants to check their calendar first". If you have not asked for
+                a time yet, stop and ask before using this tool.
         """
-        missing = _missing_contact_fields(name, phone_or_email)
-        if missing:
+        room_name, caller = _call_identity()
+
+        if not (name or "").strip():
+            return "Do not save yet - ask the caller for their name, then call this tool again."
+        if not (why_no_time or "").strip():
             return (
-                f"Do not save yet - still missing the caller's {missing}. "
-                f"Ask for it, then call this tool again."
+                "Do not save yet - ask the caller what day and time suits them "
+                "first. Use book_callback if they give you one."
             )
 
-        room_name, caller = _call_identity()
         append_lead(
             self.settings.storage.leads_file,
             kind="message",
             name=name,
-            contact=phone_or_email,
+            contact=caller,
             reason=reason,
+            raw_request=why_no_time,
             caller_number=caller,
             room=room_name,
         )
         return f"Noted. Someone will get back to {name} shortly."
-
-
-def _missing_contact_fields(name: str, phone_or_email: str) -> str:
-    """Guard against saving a row with nobody to contact.
-
-    Models call tools eagerly, sometimes before they have asked for a name or a
-    number, which produces a useless row. Returning an instruction instead of
-    saving lets the model recover mid-call.
-    """
-    missing = []
-    if not name or not name.strip():
-        missing.append("name")
-    if not phone_or_email or not phone_or_email.strip():
-        missing.append("phone number or email")
-    return " and ".join(missing)
 
 
 def _call_identity() -> tuple[str, str]:

@@ -50,6 +50,12 @@ class STTSettings:
     language_hints: list[str] = field(default_factory=lambda: ["en", "hi"])
     # End-of-turn confidence required to close a turn. Deepgram default 0.7, range 0.5-0.9.
     eot_threshold: float = 0.7
+    # Confidence at which Deepgram emits an EARLY end-of-turn signal so the LLM
+    # can start generating before the turn is confirmed. Disabled by the plugin
+    # unless set, and it is one of the largest latency wins available: the LLM
+    # is already producing tokens by the time the caller actually stops. Must be
+    # <= eot_threshold. Set to 0 to disable.
+    eager_eot_threshold: float = 0.4
     # Silence (ms) before a turn is force-closed. Deepgram default 3000.
     eot_timeout_ms: int = 3000
 
@@ -59,6 +65,10 @@ class LLMSettings:
     provider: str = "groq"
     model: str = "openai/gpt-oss-120b"
     temperature: float = 0.4
+    # Hard cap on reply length. A voice reply should be one or two sentences;
+    # capping it stops the model rambling, which is both slow to speak and bad
+    # on a call. Roughly 200 tokens is 150 words, well above a normal reply.
+    max_completion_tokens: int = 200
 
 
 # Default model per TTS provider. Without this, switching TTS_PROVIDER while
@@ -241,12 +251,14 @@ class Settings:
                 model=_env("STT_MODEL", profile_stt_model),
                 language_hints=_csv("STT_LANGUAGE_HINTS", profile_stt_hints),
                 eot_threshold=float(_env("STT_EOT_THRESHOLD", "0.7")),
+                eager_eot_threshold=float(_env("STT_EAGER_EOT_THRESHOLD", "0.4")),
                 eot_timeout_ms=int(_env("STT_EOT_TIMEOUT_MS", "3000")),
             ),
             llm=LLMSettings(
                 provider=_env("LLM_PROVIDER", "groq"),
                 model=_env("LLM_MODEL", "openai/gpt-oss-120b"),
                 temperature=float(_env("LLM_TEMPERATURE", "0.4")),
+                max_completion_tokens=int(_env("LLM_MAX_TOKENS", "200")),
             ),
             tts=TTSSettings(
                 provider=tts_provider,

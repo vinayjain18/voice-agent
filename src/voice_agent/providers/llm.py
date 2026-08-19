@@ -16,6 +16,7 @@ def build_llm(settings: LLMSettings) -> llm_base.LLM:
             model=settings.model,
             api_key=require_api_key("groq"),
             temperature=settings.temperature,
+            max_completion_tokens=settings.max_completion_tokens,
         )
     raise ConfigError(
         f"Unsupported LLM_PROVIDER '{settings.provider}'. Supported: groq."

@@ -14,6 +14,7 @@ scope and not inside a function.
 from __future__ import annotations
 
 import logging
+import time
 
 from livekit.agents import AgentServer, JobContext, JobProcess
 
@@ -23,7 +24,7 @@ from livekit.agents import AgentServer, JobContext, JobProcess
 # must stay at module level. See providers/stt.py.
 from voice_agent.agents import ReceptionistAgent
 from voice_agent.config import Settings
-from voice_agent.observability import attach_metrics_logging
+from voice_agent.observability import attach_metrics_logging, log_session_summary
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
 from voice_agent.storage import save_transcript
@@ -92,19 +93,40 @@ async def entrypoint(ctx: JobContext) -> None:
     if settings.log_metrics:
         attach_metrics_logging(session)
 
+    started_at = time.monotonic()
+
     await session.start(ReceptionistAgent(settings=settings), room=ctx.room)
     await ctx.connect()
 
-    if settings.storage.save_transcripts:
+    async def _on_shutdown() -> None:
+        """Print what the call used and cost, then save the transcript.
 
-        async def _persist_transcript() -> None:
+        Runs when the caller hangs up, when the LiveKit console ends the
+        session, and on Ctrl+C in terminal mode.
+        """
+        duration = time.monotonic() - started_at
+        cost = log_session_summary(session, duration)
+
+        if settings.storage.save_transcripts:
             save_transcript(
                 settings.storage.transcripts_dir,
                 room=ctx.room.name,
                 history=session.history,
+                extra={
+                    "duration_seconds": round(duration, 1),
+                    "estimated_cost_usd": round(cost.total_usd, 6) if cost else None,
+                    "usage": [
+                        {
+                            "label": item.label,
+                            "detail": item.detail,
+                            "cost_usd": item.cost_usd,
+                        }
+                        for item in (cost.items if cost else [])
+                    ],
+                },
             )
 
-        ctx.add_shutdown_callback(_persist_transcript)
+    ctx.add_shutdown_callback(_on_shutdown)
 
     # Let the model produce the greeting from its own instructions rather than
     # hardcoding a line here, so the opening stays in the prompt where it can be

@@ -33,6 +33,10 @@ def _deepgram(settings: STTSettings) -> stt_base.STT:
             "eot_threshold": settings.eot_threshold,
             "eot_timeout_ms": settings.eot_timeout_ms,
         }
+        # Preemptive generation: only valid when <= eot_threshold, and the
+        # plugin raises if it is not. Skip when set to 0.
+        if 0 < settings.eager_eot_threshold <= settings.eot_threshold:
+            kwargs["eager_eot_threshold"] = settings.eager_eot_threshold
         # language_hint is only accepted by the multilingual Flux model; passing
         # it to flux-general-en makes the plugin log a warning and drop it.
         if settings.model == "flux-general-multi" and settings.language_hints:

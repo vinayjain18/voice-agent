@@ -1,16 +1,13 @@
-"""Booking flow: date injection and the incomplete-lead guard."""
+"""Booking flow: date injection, mandatory time, and caller-number reuse."""
 
 from __future__ import annotations
 
 import csv
+from unittest.mock import patch
 
 import pytest
 
-from voice_agent.agents.receptionist import (
-    ReceptionistAgent,
-    _missing_contact_fields,
-    build_prompt_variables,
-)
+from voice_agent.agents.receptionist import ReceptionistAgent, build_prompt_variables
 from voice_agent.business import load_profile
 from voice_agent.config import Settings
 
@@ -21,6 +18,16 @@ def _keys(monkeypatch):
         monkeypatch.setenv(key, "test-key")
 
 
+@pytest.fixture
+def agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    return ReceptionistAgent(settings=Settings.load())
+
+
+def _rows(tmp_path):
+    return list(csv.DictReader((tmp_path / "leads.csv").open()))
+
+
 def test_prompt_carries_todays_date():
     """Without this the model invents a date for 'next Tuesday'."""
     variables = build_prompt_variables(load_profile(), Settings.load())
@@ -28,44 +35,124 @@ def test_prompt_carries_todays_date():
     assert variables["current_datetime"]
 
 
-def test_missing_fields_detected():
-    assert _missing_contact_fields("", "") == "name and phone number or email"
-    assert _missing_contact_fields("Raj", "") == "phone number or email"
-    assert _missing_contact_fields("", "a@b.com") == "name"
-    assert _missing_contact_fields("Raj", "a@b.com") == ""
+def test_prompt_forbids_asking_for_contact_details():
+    """It nagged a real caller for a number it did not need."""
+    from voice_agent.prompts import render_prompt
 
-
-async def test_booking_saves_a_row(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    agent = ReceptionistAgent(settings=Settings.load())
-    result = await agent.book_callback(
-        None, name="Raj", phone_or_email="raj@x.com",
-        preferred_date="2026-08-25", preferred_time="15:00",
-        reason="voice agent", raw_request="next Tuesday at 3",
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
     )
+    assert "Never ask for a phone number" in rendered
+    assert "email address" in rendered
+
+
+def test_prompt_forbids_repeating_questions():
+    """It re-asked the same question repeatedly into silence."""
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "Never repeat a question" in rendered
+    assert "Never send several messages in a row" in rendered
+
+
+def test_booking_tool_has_no_contact_argument():
+    """The model cannot ask for what it cannot pass."""
+    import inspect
+
+    from voice_agent.agents.receptionist import ReceptionistAgent
+
+    params = inspect.signature(ReceptionistAgent.book_callback).parameters
+    assert "phone_or_email" not in params
+    assert "email" not in " ".join(params)
+
+
+async def test_booking_records_caller_number_silently(agent, tmp_path):
+    """The number is captured from the call, never requested."""
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", "+919876543210"),
+    ):
+        result = await agent.book_callback(
+            None, name="Raj", preferred_date="2026-08-25",
+            preferred_time="15:00", reason="voice agent",
+            raw_request="next Tuesday at 3",
+        )
     assert "Booked" in result
-    rows = list(csv.DictReader((tmp_path / "leads.csv").open()))
-    assert rows[0]["kind"] == "booking"
-    assert rows[0]["preferred_date"] == "2026-08-25"
-    assert rows[0]["preferred_time"] == "15:00"
-    assert rows[0]["raw_request"] == "next Tuesday at 3"
+    row = _rows(tmp_path)[0]
+    assert row["kind"] == "booking"
+    assert row["contact"] == "+919876543210"
+    assert row["caller_number"] == "+919876543210"
+    assert row["preferred_date"] == "2026-08-25"
+    assert row["preferred_time"] == "15:00"
 
 
-async def test_booking_refuses_without_contact(tmp_path, monkeypatch):
-    """The junk row seen in real testing: tool fired before details collected."""
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    agent = ReceptionistAgent(settings=Settings.load())
-    result = await agent.book_callback(
-        None, name="", phone_or_email="",
-        preferred_date="2026-08-25", preferred_time="15:00", reason="x",
-    )
+async def test_booking_refuses_without_a_time(agent, tmp_path):
+    """The real bug: a lead was saved with no time because none was asked for."""
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", "+919876543210"),
+    ):
+        result = await agent.book_callback(
+            None, name="Raj", preferred_date="2026-08-25", preferred_time="",
+            reason="x",
+        )
+    assert "no time was given" in result
+    assert not (tmp_path / "leads.csv").exists()
+
+
+async def test_booking_refuses_without_name(agent, tmp_path):
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", "+919876543210"),
+    ):
+        result = await agent.book_callback(
+            None, name="", preferred_date="2026-08-25", preferred_time="15:00",
+            reason="x",
+        )
     assert "Do not save yet" in result
     assert not (tmp_path / "leads.csv").exists()
 
 
-async def test_message_refuses_without_contact(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    agent = ReceptionistAgent(settings=Settings.load())
-    result = await agent.take_callback_details(None, name="Raj", phone_or_email="", reason="x")
-    assert "Do not save yet" in result
+async def test_message_requires_a_reason_no_time_was_given(agent, tmp_path):
+    """Forces the model to have actually asked for a time."""
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", "+919876543210"),
+    ):
+        result = await agent.take_callback_details(
+            None, name="Raj", reason="x", why_no_time="",
+        )
+    assert "what day and time" in result
     assert not (tmp_path / "leads.csv").exists()
+
+
+async def test_booking_works_without_a_caller_number(agent, tmp_path):
+    """Console and browser sessions have no number. That must not block a booking."""
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("console-1", ""),
+    ):
+        result = await agent.book_callback(
+            None, name="Raj", preferred_date="2026-08-25",
+            preferred_time="15:00", reason="x",
+        )
+    assert "Booked" in result
+    assert _rows(tmp_path)[0]["contact"] == ""
+
+
+async def test_message_saved_with_justification(agent, tmp_path):
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", "+919876543210"),
+    ):
+        result = await agent.take_callback_details(
+            None, name="Raj", reason="pricing",
+            why_no_time="wants to check their calendar",
+        )
+    assert "Noted" in result
+    row = _rows(tmp_path)[0]
+    assert row["kind"] == "message"
+    assert row["raw_request"] == "wants to check their calendar"
+    assert row["contact"] == "+919876543210"

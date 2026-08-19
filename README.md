@@ -271,6 +271,55 @@ to 3 s once in twenty turns feels broken, and the mean hides it.
 
 ---
 
+## Session cost and usage
+
+When a call ends - caller hangs up, the LiveKit console stops the session, or
+`Ctrl+C` in terminal mode - a summary is printed:
+
+```
+==================================================================
+  SESSION SUMMARY
+==================================================================
+  Duration        3m 5s
+
+  STT  deepgram:flux-general-multi
+      3m 2s of audio                                   $0.02366
+  LLM  groq:openai/gpt-oss-120b
+      14,200 in (9,800 cached) + 640 out tokens        $0.00178
+  TTS  rumik:mulberry
+      1,840 characters, 1m 28s spoken                  $0.00920
+
+------------------------------------------------------------------
+  TOTAL           $0.0346   (about Rs 3.05)
+==================================================================
+```
+
+Token counts and audio durations come from LiveKit's own `session.usage`, not
+from estimates. Prices are provider list rates in `src/voice_agent/pricing.py`,
+each annotated with its source and the date checked:
+
+| Model | Rate | Source |
+|---|---|---|
+| Deepgram `flux-general-multi` | $0.0078 / min | deepgram.com/pricing |
+| Groq `openai/gpt-oss-120b` | $0.15 / $0.60 per Mtok, cached input half | console.groq.com/docs/models |
+| Rumik `mulberry` | $0.005 / 1k chars | rumik.ai/silk-api |
+| Deepgram `aura-2-*` | $0.030 / 1k chars | deepgram.com/pricing |
+
+Cached LLM input is billed at half rate and counted separately, because on a
+voice agent the system prompt dominates input tokens and is nearly all cached.
+Ignoring that overstates LLM cost by roughly 2x.
+
+**What the total excludes:** LiveKit Cloud agent minutes and any telephony
+charges. Both are usage-based on their own bills and are not per-model costs.
+Volume tiers are not applied either, so treat the number as a close estimate.
+
+Set `USD_INR` to get accurate rupee figures; it defaults to an approximate rate.
+
+The same figures are written into each transcript JSON as `duration_seconds`,
+`estimated_cost_usd` and a `usage` breakdown.
+
+---
+
 ## Project structure
 
 ```
