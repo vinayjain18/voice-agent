@@ -25,6 +25,7 @@ from livekit.protocol.rtc import SessionDescription
 
 from livekit import api
 from voice_agent.config import Settings
+from voice_agent.whatsapp.disconnect import CALL_ID_ATTRIBUTE
 from voice_agent.whatsapp.payload import WhatsAppCallEvent, parse_call_events
 
 logger = logging.getLogger("voice_agent.whatsapp")
@@ -95,13 +96,17 @@ async def receive(request: Request) -> Response:
         return Response(status_code=200, content="ignored")
 
     for event in events:
-        if not event.is_inbound_connect:
+        if event.is_inbound_connect:
+            await _accept(settings, event)
+        elif event.event == "terminate":
+            # The caller hung up. Telling LiveKit promptly frees the room and
+            # stops the agent running for LiveKit's 30 second grace period.
+            await _release(settings, event)
+        else:
             logger.info(
                 "ignoring call event id=%s event=%r sdp_type=%r",
                 event.call_id, event.event, event.sdp_type,
             )
-            continue
-        await _accept(settings, event)
 
     return Response(status_code=200, content="ok")
 
@@ -135,6 +140,9 @@ async def _accept(settings: Settings, event: WhatsAppCallEvent) -> None:
                 sdp=SessionDescription(type=event.sdp_type or "offer", sdp=event.sdp),
                 room_name=room,
                 agents=[RoomAgentDispatch(agent_name=wa.agent_name)],
+                # The agent reads this on shutdown so it can hang up the
+                # WhatsApp leg, not just leave the LiveKit room.
+                participant_attributes={CALL_ID_ATTRIBUTE: event.call_id},
                 wait_until_answered=wa.wait_until_answered,
             )
         )
@@ -143,6 +151,27 @@ async def _accept(settings: Settings, event: WhatsAppCallEvent) -> None:
         # A failure here means the caller hears nothing. Log loudly; never let
         # it bubble up and turn into a retry storm from Meta.
         logger.exception("failed to accept WhatsApp call %s", event.call_id)
+    finally:
+        await lkapi.aclose()
+
+
+async def _release(settings: Settings, event: WhatsAppCallEvent) -> None:
+    """Tell LiveKit the user hung up, so it tears the room down immediately."""
+    lkapi = api.LiveKitAPI()
+    try:
+        await lkapi.connector.disconnect_whatsapp_call(
+            api.DisconnectWhatsAppCallRequest(
+                whatsapp_call_id=event.call_id,
+                # USER_INITIATED needs no Meta token: nothing is sent to WhatsApp.
+                disconnect_reason=api.DisconnectWhatsAppCallRequest.USER_INITIATED,
+            )
+        )
+        logger.info("released WhatsApp call %s after user hangup", event.call_id)
+    except Exception as exc:  # noqa: BLE001
+        # Meta also sends terminate when the BUSINESS hangs up, and the agent has
+        # already disconnected that call. A second disconnect is an expected
+        # error here, not a failure worth a stack trace.
+        logger.info("disconnect for %s not needed: %s", event.call_id, exc)
     finally:
         await lkapi.aclose()
 

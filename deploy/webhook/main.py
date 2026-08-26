@@ -19,11 +19,11 @@ import os
 import uuid
 
 from fastapi import FastAPI, Request, Response
-from livekit import api
 from livekit.protocol.agent_dispatch import RoomAgentDispatch
 from livekit.protocol.rtc import SessionDescription
-
 from wa.payload import WhatsAppCallEvent, parse_call_events
+
+from livekit import api
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("wa.webhook")
@@ -82,6 +82,8 @@ async def receive(request: Request) -> Response:
     for event in events:
         if event.is_inbound_connect:
             await _accept(event)
+        elif event.event == "terminate":
+            await _release(event)
         else:
             logger.info("ignoring event=%r sdp_type=%r", event.event, event.sdp_type)
 
@@ -108,12 +110,34 @@ async def _accept(event: WhatsAppCallEvent) -> None:
                 sdp=SessionDescription(type=event.sdp_type or "offer", sdp=event.sdp),
                 room_name=room,
                 agents=[RoomAgentDispatch(agent_name=agent_name)],
+                # The agent reads this on shutdown to hang up the WhatsApp leg,
+                # not just leave the LiveKit room.
+                participant_attributes={"whatsapp_call_id": event.call_id},
                 wait_until_answered=wait,
             )
         )
         logger.info("call %s connected to room %s", event.call_id, room)
     except Exception:
         logger.exception("failed to accept WhatsApp call %s", event.call_id)
+    finally:
+        await lkapi.aclose()
+
+
+async def _release(event: WhatsAppCallEvent) -> None:
+    """User hung up: free the LiveKit room instead of waiting out the 30s cleanup."""
+    lkapi = api.LiveKitAPI()
+    try:
+        await lkapi.connector.disconnect_whatsapp_call(
+            api.DisconnectWhatsAppCallRequest(
+                whatsapp_call_id=event.call_id,
+                disconnect_reason=api.DisconnectWhatsAppCallRequest.USER_INITIATED,
+            )
+        )
+        logger.info("released call %s after user hangup", event.call_id)
+    except Exception as exc:  # noqa: BLE001 - see comment below
+        # Meta also sends terminate when the business hangs up, which the agent
+        # has already disconnected. A second disconnect errors; that is expected.
+        logger.info("disconnect for %s not needed: %s", event.call_id, exc)
     finally:
         await lkapi.aclose()
 

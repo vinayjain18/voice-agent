@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -253,3 +254,101 @@ def test_webhook_source_wraps_sdp():
     text = src.read_text()
     assert "SessionDescription(" in text, "sdp must be wrapped in SessionDescription"
     assert "sdp=event.sdp," not in text, "raw string sdp would fail at runtime"
+
+
+# --- hanging up the WhatsApp leg ---------------------------------------------
+
+def test_call_id_attribute_is_passed_to_livekit():
+    """Without this the agent cannot hang up the WhatsApp call on shutdown."""
+    from pathlib import Path
+
+    from voice_agent.whatsapp.disconnect import CALL_ID_ATTRIBUTE
+
+    src = Path(__file__).parent.parent / "src/voice_agent/whatsapp/webhook.py"
+    text = src.read_text()
+    assert "participant_attributes=" in text
+    assert CALL_ID_ATTRIBUTE in text
+
+
+def test_find_call_id_reads_participant_attributes():
+    from voice_agent.whatsapp.disconnect import CALL_ID_ATTRIBUTE, find_whatsapp_call_id
+
+    class P:
+        attributes: ClassVar[dict] = {CALL_ID_ATTRIBUTE: "wacid.ABC"}
+
+    class Room:
+        remote_participants: ClassVar[dict] = {"sip_1": P()}
+
+    assert find_whatsapp_call_id(Room()) == "wacid.ABC"
+
+
+def test_find_call_id_returns_none_for_non_whatsapp_calls():
+    from voice_agent.whatsapp.disconnect import find_whatsapp_call_id
+
+    class P:
+        attributes: ClassVar[dict] = {"something": "else"}
+
+    class Room:
+        remote_participants: ClassVar[dict] = {"sip_1": P()}
+
+    assert find_whatsapp_call_id(Room()) is None
+    assert find_whatsapp_call_id(type("R", (), {"remote_participants": {}})()) is None
+
+
+def test_find_call_id_never_raises_on_a_broken_room():
+    """This runs during shutdown; an exception there helps nobody."""
+    from voice_agent.whatsapp.disconnect import find_whatsapp_call_id
+
+    assert find_whatsapp_call_id(object()) is None
+    assert find_whatsapp_call_id(type("R", (), {"remote_participants": None})()) is None
+
+
+async def test_disconnect_without_token_is_a_clean_no_op():
+    """BUSINESS_INITIATED needs the Meta token; missing it must not raise."""
+    from voice_agent.whatsapp.disconnect import disconnect_whatsapp_call
+
+    assert await disconnect_whatsapp_call("wacid.ABC", None) is False
+
+
+def test_agent_hangs_up_whatsapp_on_shutdown():
+    from pathlib import Path
+
+    src = Path(__file__).parent.parent / "src/voice_agent/main.py"
+    text = src.read_text()
+    assert "find_whatsapp_call_id" in text
+    assert "disconnect_whatsapp_call" in text
+
+
+def test_terminate_events_release_the_room():
+    """User hangup must free the room, not wait out LiveKit's 30s cleanup."""
+    from pathlib import Path
+
+    for rel in ("src/voice_agent/whatsapp/webhook.py", "deploy/webhook/main.py"):
+        text = (Path(__file__).parent.parent / rel).read_text()
+        assert '_release(' in text, f"{rel} does not handle terminate"
+        assert "USER_INITIATED" in text, f"{rel} missing USER_INITIATED"
+
+
+def test_hangup_grace_period_is_configurable(monkeypatch):
+    """Cutting the WhatsApp leg instantly clips the agent's closing line."""
+    from voice_agent.config import Settings
+
+    for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "RUMIK_API_KEY"):
+        monkeypatch.setenv(k, "x")
+    monkeypatch.delenv("WHATSAPP_HANGUP_GRACE_SECONDS", raising=False)
+    assert Settings.load().whatsapp.hangup_grace_seconds == 2.0
+
+    monkeypatch.setenv("WHATSAPP_HANGUP_GRACE_SECONDS", "4.5")
+    assert Settings.load().whatsapp.hangup_grace_seconds == 4.5
+
+
+def test_hangup_runs_after_the_transcript_not_before():
+    """Ordering is the only control we have: callbacks run via asyncio.gather."""
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / "src/voice_agent/main.py").read_text()
+    body = text[text.index("async def _on_shutdown"):text.index("ctx.add_shutdown_callback")]
+    assert body.index("save_transcript") < body.index("disconnect_whatsapp_call"), (
+        "the WhatsApp hangup must come last, after the closing audio has drained"
+    )
+    assert "asyncio.sleep(grace)" in body

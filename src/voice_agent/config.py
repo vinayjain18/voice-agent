@@ -130,6 +130,10 @@ class WhatsAppSettings:
     # accept_whatsapp_call can block until the agent joins. Meta times webhooks
     # out, so on a cold-starting agent this may need to be False.
     wait_until_answered: bool = True
+    # Seconds to wait after the session closes before hanging up the WhatsApp
+    # leg. Audio already handed to the transport is still travelling to the
+    # caller's phone; cutting the call immediately clips the closing line.
+    hangup_grace_seconds: float = 2.0
 
     @property
     def is_configured(self) -> bool:
@@ -312,6 +316,9 @@ class Settings:
                 room_prefix=_env("WHATSAPP_ROOM_PREFIX", "whatsapp"),
                 wait_until_answered=_env("WHATSAPP_WAIT_UNTIL_ANSWERED", "true").lower()
                 in {"1", "true", "yes"},
+                hangup_grace_seconds=float(
+                    _env("WHATSAPP_HANGUP_GRACE_SECONDS", "2.0")
+                ),
             ),
             language=LanguageProfile(name=profile_name),
             log_metrics=_env("LOG_METRICS", "true").lower() in {"1", "true", "yes"},

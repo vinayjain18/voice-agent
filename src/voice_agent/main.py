@@ -13,6 +13,7 @@ scope and not inside a function.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -29,6 +30,10 @@ from voice_agent.observability import attach_metrics_logging, log_session_summar
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
 from voice_agent.storage import save_transcript
+from voice_agent.whatsapp.disconnect import (
+    disconnect_whatsapp_call,
+    find_whatsapp_call_id,
+)
 
 logger = logging.getLogger("voice_agent")
 
@@ -119,11 +124,16 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
 
     async def _on_shutdown() -> None:
-        """Print what the call used and cost, then save the transcript.
+        """Hang up the WhatsApp leg, then log usage and save the transcript.
 
-        Runs when the caller hangs up, when the LiveKit console ends the
-        session, and on Ctrl+C in terminal mode.
+        Runs when the caller hangs up, when the agent ends the call itself, when
+        the LiveKit console ends the session, and on Ctrl+C in terminal mode.
         """
+        # Deleting the LiveKit room does not end the WhatsApp call: without an
+        # explicit disconnect the caller hears silence until LiveKit's 30 second
+        # cleanup. Capture the id now, but hang up LAST - see below.
+        call_id = find_whatsapp_call_id(ctx.room)
+
         duration = time.monotonic() - started_at
         cost = log_session_summary(session, duration)
 
@@ -145,6 +155,17 @@ async def entrypoint(ctx: JobContext) -> None:
                     ],
                 },
             )
+
+        # Hang up only after the bookkeeping above, plus a short grace period.
+        # Audio handed to the transport is still in flight to the caller's phone
+        # when the session closes; disconnecting immediately clips the agent's
+        # closing line. Shutdown callbacks run concurrently (asyncio.gather), so
+        # this ordering is the only control we have over when the leg drops.
+        if call_id:
+            grace = max(0.0, settings.whatsapp.hangup_grace_seconds)
+            if grace:
+                await asyncio.sleep(grace)
+            await disconnect_whatsapp_call(call_id, settings.whatsapp.access_token)
 
     ctx.add_shutdown_callback(_on_shutdown)
 
