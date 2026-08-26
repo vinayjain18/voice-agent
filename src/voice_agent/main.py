@@ -84,7 +84,6 @@ def setup(proc: JobProcess) -> None:
 server.setup_fnc = setup
 
 
-@server.rtc_session()
 def _is_outbound(ctx: JobContext) -> bool:
     """Outbound calls carry direction in the dispatch metadata (see make_call.py).
 
@@ -101,6 +100,7 @@ def _is_outbound(ctx: JobContext) -> bool:
         return False
 
 
+@server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     settings = Settings.load()
     outbound = _is_outbound(ctx)
