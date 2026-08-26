@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from livekit.agents import Agent, RunContext, function_tool, get_job_context
+from livekit.agents.beta.tools import EndCallTool
 
 from voice_agent.business import BusinessProfile, load_profile
 from voice_agent.config import Settings
@@ -70,7 +71,23 @@ class ReceptionistAgent(Agent):
                 build_prompt_variables(
                     self.profile, self.settings, outbound=outbound
                 ),
-            )
+            ),
+            tools=[
+                EndCallTool(
+                    # The model says this closing line first; the session shuts
+                    # down only once that speech has finished playing.
+                    end_instructions=(
+                        "Say a short, warm goodbye. One sentence. Do not ask "
+                        "another question."
+                    ),
+                    # Disconnects every remote participant, including SIP and
+                    # WhatsApp callers, so the caller's phone actually hangs up.
+                    delete_room=True,
+                    # Without this the model could end the call during its own
+                    # greeting, before the caller has said anything.
+                    ignore_on_enter=True,
+                ),
+            ],
         )
 
     @function_tool

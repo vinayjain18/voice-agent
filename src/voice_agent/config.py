@@ -113,6 +113,30 @@ class StorageSettings:
 
 
 @dataclass(frozen=True)
+class WhatsAppSettings:
+    """Meta WhatsApp Cloud API credentials for the call webhook.
+
+    Only the webhook needs these; the agent itself is unaware that a call
+    arrived over WhatsApp rather than SIP.
+    """
+
+    phone_number_id: str | None = None
+    access_token: str | None = None
+    verify_token: str | None = None
+    app_secret: str | None = None
+    cloud_api_version: str = "25.0"
+    agent_name: str = "voice-agent-demo"
+    room_prefix: str = "whatsapp"
+    # accept_whatsapp_call can block until the agent joins. Meta times webhooks
+    # out, so on a cold-starting agent this may need to be False.
+    wait_until_answered: bool = True
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.phone_number_id and self.access_token and self.verify_token)
+
+
+@dataclass(frozen=True)
 class LanguageProfile:
     """A coherent STT + TTS + turn-detection combination.
 
@@ -199,6 +223,7 @@ class Settings:
     pipeline: PipelineSettings
     storage: StorageSettings
     language: LanguageProfile
+    whatsapp: WhatsAppSettings
     log_metrics: bool
 
     def preflight(self) -> None:
@@ -276,6 +301,17 @@ class Settings:
             pipeline=PipelineSettings(
                 turn_detection=_env("TURN_DETECTION", "auto").lower(),
                 interruption_mode=_env("INTERRUPTION_MODE", "auto").lower(),
+            ),
+            whatsapp=WhatsAppSettings(
+                phone_number_id=_env("WHATSAPP_PHONE_NUMBER_ID"),
+                access_token=_env("WHATSAPP_ACCESS_TOKEN"),
+                verify_token=_env("WHATSAPP_VERIFY_TOKEN"),
+                app_secret=_env("WHATSAPP_APP_SECRET"),
+                cloud_api_version=_env("WHATSAPP_CLOUD_API_VERSION", "25.0"),
+                agent_name=_env("LIVEKIT_AGENT_NAME", "voice-agent-demo"),
+                room_prefix=_env("WHATSAPP_ROOM_PREFIX", "whatsapp"),
+                wait_until_answered=_env("WHATSAPP_WAIT_UNTIL_ANSWERED", "true").lower()
+                in {"1", "true", "yes"},
             ),
             language=LanguageProfile(name=profile_name),
             log_metrics=_env("LOG_METRICS", "true").lower() in {"1", "true", "yes"},

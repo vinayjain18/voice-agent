@@ -8,12 +8,14 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.141.1",
     "livekit-agents[silero,turn-detector]~=1.6",
     "livekit-plugins-cartesia>=1.6.10",
     "livekit-plugins-deepgram>=1.6.10",
     "livekit-plugins-groq>=1.6.10",
     "livekit-plugins-rumik-ai>=0.2.2",
     "python-dotenv>=1.2.3",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [build-system]

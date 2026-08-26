@@ -156,3 +156,45 @@ async def test_message_saved_with_justification(agent, tmp_path):
     assert row["kind"] == "message"
     assert row["raw_request"] == "wants to check their calendar"
     assert row["contact"] == "+919876543210"
+
+
+# --- ending the call --------------------------------------------------------
+
+def test_agent_has_the_end_call_tool():
+    """Without it the caller is left on a silent line after the booking."""
+    from livekit.agents.beta.tools import EndCallTool
+
+    agent = ReceptionistAgent()
+    toolsets = [t for t in agent._tools if isinstance(t, EndCallTool)]
+    assert toolsets, "EndCallTool is not registered"
+    assert "end_call" in [t.info.name for t in toolsets[0].tools]
+
+
+def test_end_call_cannot_fire_during_the_greeting():
+    """ignore_on_enter stops the model hanging up while saying hello."""
+    from livekit.agents.beta.tools import EndCallTool
+    from livekit.agents.llm import ToolFlag
+
+    agent = ReceptionistAgent()
+    toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
+    tool = toolset.tools[0]
+    assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+
+
+def test_end_call_deletes_the_room():
+    """Deleting the room is what actually disconnects a phone or WhatsApp caller."""
+    from livekit.agents.beta.tools import EndCallTool
+
+    agent = ReceptionistAgent()
+    toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
+    assert toolset._delete_room is True
+
+
+def test_prompt_says_when_to_end_the_call():
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "end_call" in rendered
+    assert "anything else" in rendered
