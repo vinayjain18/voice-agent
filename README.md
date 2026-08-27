@@ -50,6 +50,7 @@ environment variable. Every provider is swappable the same way.
 - [Development](#development)
 - [Why a framework](#why-a-framework)
 - [Limitations](#limitations)
+- [License](#license)
 
 ---
 
@@ -751,3 +752,13 @@ the guards on when to hang up, and the accounting.
   local regulation.
 - **There is no CI configuration** in this repo. Run `uv run pytest` and
   `uv run ruff check .` before you commit.
+
+---
+
+## License
+
+[MIT](LICENSE). Use it, change it, ship it.
+
+The business content under `src/voice_agent/business/` is example data for a
+specific company and is not covered by any warranty of accuracy. Replace it with
+your own before using this with real callers.
