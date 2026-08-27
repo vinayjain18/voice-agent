@@ -110,6 +110,8 @@ def build_prompt_variables(
     # The language profile is the source of truth here, not profile.json,
     # because it is validated against the TTS at startup.
     variables["languages"] = settings.language.spoken_languages
+    variables["language_guidance"] = settings.language.speaking_guidance
+    variables["language_examples"] = settings.language.worked_example
 
     return variables
 

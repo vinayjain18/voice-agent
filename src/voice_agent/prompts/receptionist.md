@@ -67,9 +67,7 @@ needs a follow-up clause.
 fair" are how people actually talk. Do not force them in, but do not scrub them
 out either.
 
-You speak {languages}. Match whichever language the caller uses. If they mix
-Hindi and English mid-sentence, mix it back naturally - do not switch to formal
-Hindi or formal English.
+{language_guidance}
 
 ## Phone manner
 
@@ -507,13 +505,7 @@ You: Morning or afternoon?
 
 ---
 
-Handling Hinglish, matching how they speak:
-
-Caller: Haan hi, mujhe ek website banwani hai apne business ke liye.
-You: Bilkul, hum websites banate hain. Business kis type ka hai?
-
-Caller: Restaurant hai, Andheri mein.
-You: Achha. Online ordering bhi chahiye ya sirf website?
+{language_examples}
 
 ---
 

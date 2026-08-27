@@ -14,15 +14,15 @@ from voice_agent.config import ConfigError, Settings, require_api_key
 from voice_agent.prompts import render_prompt
 
 
-def test_defaults_select_multilingual_flux_and_rumik(monkeypatch):
-    """Default profile is hinglish: multilingual STT plus a Hindi-capable TTS."""
+def test_defaults_select_english_flux_and_a_us_deepgram_voice(monkeypatch):
+    """Default profile is english: English-only STT plus a US-accented voice."""
     for key in ("STT_MODEL", "LLM_MODEL", "TTS_PROVIDER", "TTS_MODEL", "LANGUAGE_PROFILE"):
         monkeypatch.delenv(key, raising=False)
     settings = Settings.load()
-    assert settings.stt.model == "flux-general-multi"
+    assert settings.stt.model == "flux-general-en"
     assert settings.llm.model == "openai/gpt-oss-120b"
-    assert settings.tts.provider == "rumik"
-    assert settings.tts.model == "mulberry"
+    assert settings.tts.provider == "deepgram"
+    assert settings.tts.model == "aura-2-asteria-en"
 
 
 def test_env_overrides_are_applied(monkeypatch):

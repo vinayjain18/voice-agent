@@ -44,10 +44,11 @@ def _csv(name: str, default: list[str]) -> list[str]:
 @dataclass(frozen=True)
 class STTSettings:
     provider: str = "deepgram"
-    # flux-general-multi is the multilingual Flux model; flux-general-en is English-only.
-    model: str = "flux-general-multi"
+    # flux-general-en is English-only; flux-general-multi is the multilingual
+    # model, selected by LANGUAGE_PROFILE=hinglish.
+    model: str = "flux-general-en"
     # Only honoured by flux-general-multi. Biases the model toward these languages.
-    language_hints: list[str] = field(default_factory=lambda: ["en", "hi"])
+    language_hints: list[str] = field(default_factory=lambda: ["en"])
     # End-of-turn confidence required to close a turn. Deepgram default 0.7, range 0.5-0.9.
     eot_threshold: float = 0.7
     # Confidence at which Deepgram emits an EARLY end-of-turn signal so the LLM
@@ -74,7 +75,9 @@ class LLMSettings:
 # Default model per TTS provider. Without this, switching TTS_PROVIDER while
 # leaving TTS_MODEL alone hands one provider another provider's model name.
 TTS_DEFAULT_MODELS = {
-    "deepgram": "aura-2-andromeda-en",
+    # Aura-2 voices are labelled by accent. asteria is US English, which is the
+    # default the agent ships with; see README "Choosing a voice" for the rest.
+    "deepgram": "aura-2-asteria-en",
     "rumik": "mulberry",
     "cartesia": "sonic-3",
 }
@@ -88,7 +91,7 @@ ENGLISH_ONLY_TTS = {"deepgram"}
 @dataclass(frozen=True)
 class TTSSettings:
     provider: str = "deepgram"
-    model: str = "aura-2-andromeda-en"
+    model: str = "aura-2-asteria-en"
     # Rumik-only knobs, ignored by other providers.
     rumik_speaker: str | None = None
     rumik_description: str | None = None
@@ -133,7 +136,7 @@ class WhatsAppSettings:
     # Seconds to wait after the session closes before hanging up the WhatsApp
     # leg. Audio already handed to the transport is still travelling to the
     # caller's phone; cutting the call immediately clips the closing line.
-    hangup_grace_seconds: float = 2.0
+    hangup_grace_seconds: float = 1.0
 
     @property
     def is_configured(self) -> bool:
@@ -146,9 +149,13 @@ class LanguageProfile:
 
     Set as one variable so the parts cannot drift apart - the Phase 1 defect was
     a prompt promising Hindi over an English-only voice.
+
+    Defaults to "english", which pairs English-only Flux with a US-accented
+    Deepgram voice. "hinglish" swaps both halves for the multilingual model and
+    a Hindi-capable voice; neither half is useful without the other.
     """
 
-    name: str = "hinglish"
+    name: str = "english"
 
     @property
     def spoken_languages(self) -> str:
@@ -159,6 +166,46 @@ class LanguageProfile:
     @property
     def needs_multilingual_tts(self) -> bool:
         return self.name != "english"
+
+    @property
+    def speaking_guidance(self) -> str:
+        """How the agent should handle language, for the prompt.
+
+        This has to track the profile. Hardcoding the Hinglish rule left the
+        English pipeline being told to code-switch into a language its voice
+        cannot pronounce, which is the same defect `validate_language_support`
+        exists to catch.
+        """
+        if self.name == "english":
+            return (
+                "You speak English. If a caller starts in another language, say "
+                "once that you only speak English here and ask whether they are "
+                "alright to carry on. Never try to reply in a language you do "
+                "not speak - it comes out mangled."
+            )
+        return (
+            "You speak English and Hindi. Match whichever language the caller "
+            "uses. If they mix Hindi and English mid-sentence, mix it back "
+            "naturally - do not switch to formal Hindi or formal English."
+        )
+
+    @property
+    def worked_example(self) -> str:
+        """A dialogue for the prompt showing the language rule in practice."""
+        if self.name == "english":
+            return (
+                "Handling a caller who is not speaking English:\n\n"
+                "Caller: [speaks in another language]\n"
+                "You: I'm sorry, I only speak English here. Are you alright to "
+                "carry on in English?"
+            )
+        return (
+            "Handling Hinglish, matching how they speak:\n\n"
+            "Caller: Haan hi, mujhe ek website banwani hai apne business ke liye.\n"
+            "You: Bilkul, hum websites banate hain. Business kis type ka hai?\n\n"
+            "Caller: Restaurant hai, Andheri mein.\n"
+            "You: Achha. Online ordering bhi chahiye ya sirf website?"
+        )
 
 
 LANGUAGE_PROFILES = {
@@ -264,7 +311,7 @@ class Settings:
     def load(cls) -> Settings:
         load_dotenv(PROJECT_ROOT / ".env")
 
-        profile_name = _env("LANGUAGE_PROFILE", "hinglish").lower()
+        profile_name = _env("LANGUAGE_PROFILE", "english").lower()
         if profile_name not in LANGUAGE_PROFILES:
             raise ConfigError(
                 f"LANGUAGE_PROFILE must be one of "
@@ -319,7 +366,7 @@ class Settings:
                 wait_until_answered=_env("WHATSAPP_WAIT_UNTIL_ANSWERED", "true").lower()
                 in {"1", "true", "yes"},
                 hangup_grace_seconds=float(
-                    _env("WHATSAPP_HANGUP_GRACE_SECONDS", "2.0")
+                    _env("WHATSAPP_HANGUP_GRACE_SECONDS", "1.0")
                 ),
             ),
             language=LanguageProfile(name=profile_name),

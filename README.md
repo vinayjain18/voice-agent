@@ -8,12 +8,13 @@ The same code runs four ways with no changes: **your terminal**, **a browser**,
 
 ```
 Caller ──► STT ──► LLM ──►     TTS      ──► Caller
-        Deepgram   Groq   Rumik / Deepgram
+        Deepgram   Groq   Deepgram / Rumik
           Flux
 ```
 
-Built on [LiveKit Agents](https://docs.livekit.io/agents/). Every provider is
-swappable with a single environment variable.
+Built on [LiveKit Agents](https://docs.livekit.io/agents/). It speaks
+US-accented English out of the box, and switches to Hindi and Hinglish with one
+environment variable. Every provider is swappable the same way.
 
 ---
 
@@ -56,8 +57,8 @@ swappable with a single environment variable.
 
 - **Sub-two-second replies.** End-of-turn detection runs inside the speech model,
   and the LLM starts generating before the caller has finished speaking.
-- **English, Hindi and Hinglish**, including mid-sentence switching, or a
-  US-accented English voice if you only need English.
+- **A US-accented English voice out of the box**, and one variable away from
+  Hindi and Hinglish with mid-sentence switching.
 - **Books callbacks** into a CSV, with the caller's number captured from the call
   rather than asked for.
 - **Interruptible.** Talk over it and it stops, like a person would.
@@ -65,7 +66,7 @@ swappable with a single environment variable.
 - **Costs are itemised** per call: tokens, characters, audio seconds, and a total.
 - **Everything the agent says is data**, not code. Facts live in JSON, behaviour
   lives in a Markdown prompt.
-- **193 tests**, none of which touch the network, so the suite runs in about a
+- **195 tests**, none of which touch the network, so the suite runs in about a
   second.
 
 ---
@@ -90,7 +91,7 @@ swappable with a single environment variable.
                    └────────┬────────┘                           │
                             ▼                                    │
                    ┌─────────────────┐                           │
-                   │ Rumik/Deepgram  │  text ──► speech ─────────┘
+                   │ Deepgram/Rumik  │  text ──► speech ─────────┘
                    │      (TTS)      │
                    └─────────────────┘
 ```
@@ -109,7 +110,8 @@ Silero VAD runs locally alongside, purely to detect barge-in.
 - **Python 3.13+** (uv installs it for you)
 - **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **[LiveKit CLI](https://docs.livekit.io/home/cli/)** to run the agent
-- API keys, all with free tiers: **Deepgram**, **Groq**, and **Rumik**
+- API keys, both with free tiers: **Deepgram** and **Groq**. A **Rumik** key is
+  needed only for Hindi and Hinglish.
 - A **LiveKit Cloud** account, only for the browser, phone and WhatsApp modes.
   Terminal mode needs no LiveKit account at all.
 
@@ -138,13 +140,16 @@ curl -sSL https://get.livekit.io/cli | bash       # Linux
 cp .env.example .env
 ```
 
-Then fill in three keys:
+Then fill in two keys:
 
 | Key | Where to get it |
 | --- | --- |
 | `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) |
 | `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
-| `RUMIK_API_KEY` | [playground.rumik.ai](https://playground.rumik.ai) |
+
+A third, `RUMIK_API_KEY` from [playground.rumik.ai](https://playground.rumik.ai),
+is needed only if you switch to Hindi or Hinglish. See
+[Language](#language).
 
 **4. Talk to it**
 
@@ -331,14 +336,14 @@ their defaults; the ones you are most likely to change are below.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `LANGUAGE_PROFILE` | `hinglish` | `english` or `hinglish`. Sets a coherent STT + TTS pair. |
-| `STT_MODEL` | from profile | Deepgram model. |
+| `LANGUAGE_PROFILE` | `english` | `english` (US accent) or `hinglish`. Sets STT, TTS and prompt together. |
+| `STT_MODEL` | `flux-general-en` | Deepgram model. The profile sets this. |
 | `LLM_MODEL` | `openai/gpt-oss-120b` | Any Groq-hosted model. |
 | `LLM_TEMPERATURE` | `0.4` | Higher wanders, lower repeats. |
 | `LLM_MAX_TOKENS` | `200` | Caps reply length. A voice reply should be short. |
-| `TTS_PROVIDER` | from profile | `rumik`, `deepgram` or `cartesia`. |
-| `RUMIK_SPEAKER` | `ira` | Rumik voice preset. |
-| `TTS_MODEL` | from provider | Voice/model. Aura-2 names select a Deepgram accent. |
+| `TTS_PROVIDER` | from profile | `deepgram`, `rumik` or `cartesia`. |
+| `TTS_MODEL` | `aura-2-asteria-en` | The voice. Aura-2 names carry the accent. |
+| `RUMIK_SPEAKER` | `ira` | Rumik voice preset, used only with `TTS_PROVIDER=rumik`. |
 | `TURN_DETECTION` | `auto` | `stt`, `vad`, `livekit` or `auto`. |
 | `INTERRUPTION_MODE` | `auto` | `vad` or `adaptive`. |
 | `STT_EAGER_EOT_THRESHOLD` | `0.4` | Early end-of-turn. The main latency lever. |
@@ -350,16 +355,32 @@ their defaults; the ones you are most likely to change are below.
 ### Language
 
 ```bash
-LANGUAGE_PROFILE=hinglish   # English + Hindi + Hinglish  (default)
-LANGUAGE_PROFILE=english    # English only
+LANGUAGE_PROFILE=english    # English only, US accent  (default)
+LANGUAGE_PROFILE=hinglish   # English + Hindi + Hinglish
 ```
 
-A profile sets the speech model, its language hints and the voice together, so
-the two cannot drift apart. Asking for a language the voice cannot speak is
-refused at startup rather than producing mangled audio on a live call.
+One variable sets the speech model, its language hints, the voice **and** the
+language instructions in the prompt, so no two of them can drift apart.
 
-Deepgram's Aura voices have no Hindi at all, which is why the Hinglish profile
-uses Rumik.
+| | `english` (default) | `hinglish` |
+| --- | --- | --- |
+| STT | `flux-general-en` | `flux-general-multi` |
+| TTS | Deepgram `aura-2-asteria-en` | Rumik `mulberry` |
+| Extra key | none | `RUMIK_API_KEY` |
+| Prompt says | "You speak English" | "You speak English and Hindi" |
+
+Switching to Hinglish is two lines:
+
+```bash
+LANGUAGE_PROFILE=hinglish
+RUMIK_API_KEY=your-key
+```
+
+The profile picks Rumik on its own, so `TTS_PROVIDER` can stay unset.
+
+Asking for a language the voice cannot speak is refused at startup rather than
+producing mangled audio on a live call. Deepgram's Aura voices have no Hindi at
+all, which is why the Hinglish profile switches to Rumik.
 
 ### Switching providers
 
@@ -375,49 +396,15 @@ do not have to set both.
 
 ### Choosing a voice
 
-Which voices you can pick from depends on which TTS provider is active.
-
-| Provider | Voices | Languages |
-| --- | --- | --- |
-| `rumik` | `mulberry` presets, or a written description | English, Hindi, Hinglish |
-| `deepgram` | Aura-2, dozens of voices with named accents | English only |
-| `cartesia` | `sonic-3` | English |
-
-**Rumik** takes a preset name:
+The default voice is **`aura-2-asteria-en`**, an American English voice from
+Deepgram's Aura-2 range. To use a different one:
 
 ```bash
-RUMIK_SPEAKER=ira           # female: emma mia sophia ava ira siya aisha zoya
-                            # male:   lucas noah theo adam
+TTS_MODEL=aura-2-orion-en
 ```
 
-Always leave a voice set. An unpinned Rumik voice is generated fresh on every
-request, so it can change between one sentence and the next.
-
-#### Switching to a US accent
-
-Deepgram's Aura-2 voices are labelled by accent, so this is the provider to use
-when the accent matters. Two variables, not one:
-
-```bash
-LANGUAGE_PROFILE=english
-TTS_PROVIDER=deepgram
-TTS_MODEL=aura-2-asteria-en
-```
-
-`LANGUAGE_PROFILE=english` is required, not optional. Aura has no Hindi voice at
-all, so asking for the Hinglish profile with a Deepgram voice is refused at
-startup:
-
-```
-LANGUAGE_PROFILE=hinglish needs a TTS that can speak Hindi, but
-TTS_PROVIDER=deepgram is English-only (Deepgram Aura has no Hindi voice).
-```
-
-That is deliberate. A prompt promising Hindi over an English-only voice produces
-mangled audio on a live call, so it fails while nobody is on the line.
-
-`TTS_MODEL` is optional: leaving it out gives `aura-2-andromeda-en`, which is
-already US English.
+That is the whole change. Accent is carried by the voice name; there is no
+separate accent setting.
 
 **American English voices:**
 
@@ -431,20 +418,27 @@ Use them as `aura-2-<name>-en`.
 **Other accents:** `aura-2-draco-en` (British male), `aura-2-theia-en`
 (Australian female), `aura-2-hyperion-en` (Australian male).
 
-Deepgram publishes the full catalogue with samples at
+Deepgram publishes the full catalogue with audio samples at
 [developers.deepgram.com/docs/tts-models](https://developers.deepgram.com/docs/tts-models).
 Any Aura voice name works here, including ones newer than the list above.
 
-Switching back is the reverse:
+#### Voices for Hindi and Hinglish
+
+Aura has no Hindi voice, so `LANGUAGE_PROFILE=hinglish` switches to Rumik. Pick
+a preset:
 
 ```bash
 LANGUAGE_PROFILE=hinglish
-TTS_PROVIDER=rumik
+RUMIK_API_KEY=your-key
+RUMIK_SPEAKER=ira           # female: emma mia sophia ava ira siya aisha zoya
+                            # male:   lucas noah theo adam
 ```
 
-#### Describing a voice instead of naming one
+Always leave a voice set. An unpinned Rumik voice is generated fresh on every
+request, so it can change between one sentence and the next. `ira` is used if
+you set nothing.
 
-Rumik's `mulberry` can generate a voice from a written description:
+Rumik can also generate a voice from a written description:
 
 ```bash
 RUMIK_SPEAKER=
@@ -452,10 +446,17 @@ RUMIK_DESCRIPTION="A warm American woman in her thirties, calm and unhurried"
 ```
 
 `RUMIK_SPEAKER` **must be empty** for this to apply. A speaker name always wins
-over a description, so leaving both set silently ignores the description.
+over a description, so leaving both set silently ignores the description. A
+described voice is also regenerated per request and can drift between
+utterances, which is why a named preset is the default.
 
-This trades consistency for flexibility: a described voice is regenerated per
-request and can drift between utterances. A named preset is the safer default.
+#### All three providers
+
+| Provider | Voices | Languages |
+| --- | --- | --- |
+| `deepgram` | Aura-2, dozens of voices with named accents | English only |
+| `rumik` | `mulberry` presets, or a written description | English, Hindi, Hinglish |
+| `cartesia` | `sonic-3` | English |
 
 ### Turn-taking and latency
 
@@ -682,7 +683,7 @@ voice-agent/
 ├── deploy/webhook/              Self-contained webhook for serverless
 ├── livekit/                     Dispatch rule and trunk config
 ├── scripts/make_call.py         Place an outbound call
-├── tests/                       193 tests, no network calls
+├── tests/                       195 tests, no network calls
 └── .env.example                 Every setting, documented
 ```
 
@@ -697,7 +698,7 @@ registration must happen on the main thread; a test enforces this statically.
 
 ```bash
 uv sync                  # install
-uv run pytest            # 193 tests, about a second, no network calls
+uv run pytest            # 195 tests, about a second, no network calls
 uv run ruff check .      # lint
 ```
 

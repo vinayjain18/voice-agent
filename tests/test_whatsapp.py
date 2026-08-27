@@ -336,7 +336,7 @@ def test_hangup_grace_period_is_configurable(monkeypatch):
     for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "RUMIK_API_KEY"):
         monkeypatch.setenv(k, "x")
     monkeypatch.delenv("WHATSAPP_HANGUP_GRACE_SECONDS", raising=False)
-    assert Settings.load().whatsapp.hangup_grace_seconds == 2.0
+    assert Settings.load().whatsapp.hangup_grace_seconds == 1.0
 
     monkeypatch.setenv("WHATSAPP_HANGUP_GRACE_SECONDS", "4.5")
     assert Settings.load().whatsapp.hangup_grace_seconds == 4.5
