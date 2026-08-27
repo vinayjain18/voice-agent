@@ -30,6 +30,7 @@ def _fake_session():
     session = MagicMock()
     session.start = AsyncMock()
     session.generate_reply = AsyncMock()
+    session.say = AsyncMock()
     session.history.to_dict.return_value = {"items": []}
     session.usage = AgentSessionUsage(model_usage=[
         STTModelUsage(provider="deepgram", model="flux-general-multi", audio_duration=120.0),

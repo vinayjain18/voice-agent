@@ -3,8 +3,8 @@
 A low-latency live voice agent that answers a phone call, holds a real
 conversation about the business, and books a callback into a CSV.
 
-Runs three ways from the same code: your terminal, a browser, or a real phone
-number.
+Runs four ways from the same code: your terminal, a browser, a real phone
+number, and **WhatsApp**. The agent is identical in all of them.
 
 ---
 
@@ -125,6 +125,123 @@ an explanation.
 
 ---
 
+## Running it hosted (no laptop required)
+
+Both halves can run without anything on your machine.
+
+### The agent, on LiveKit Cloud
+
+```bash
+lk agent create --secrets-file .env --region ap-south   # first time
+lk agent deploy --secrets-file .env                     # subsequent updates
+lk agent status
+lk agent logs
+```
+
+`livekit.toml` pins the agent id, so later commands need no arguments. The free
+Build plan allows **1 agent deployment**; billing is per agent-session minute,
+not per replica.
+
+**The generated Dockerfile needed three fixes**, all commented in the file:
+
+1. Its default `CMD` ran the module file directly, which only imports it and
+   exits, because this project uses the `AgentServer` API and has no `__main__`
+   block. It now runs `python -m livekit.agents start agent.py`.
+2. `uv sync` ran before the package existed. This is a package project
+   (`uv_build` backend), so a stub module is created before the real source is
+   copied in.
+3. `README.md` is declared as the project readme, is read during `uv sync`, and
+   had to be copied in the early layer as well as un-ignored.
+
+**Cold starts:** "cold start prevention" starts at LiveKit's Ship plan, so on the
+free tier the first call after an idle period may take a moment to answer.
+
+**Leads written by the deployed agent are lost.** The container filesystem is
+ephemeral, so `data/` does not survive a restart or redeploy. Local runs are
+unaffected. Persisting cloud leads needs an external sink (a webhook to a sheet,
+or a database).
+
+### The WhatsApp webhook, on Vercel
+
+Deployed from `deploy/webhook/` as its **own** Vercel project, deliberately
+separate from the marketing site.
+
+```bash
+cd deploy/webhook
+vercel deploy --prod
+```
+
+Environment variables live in the Vercel project settings, not in the deploy
+command. Setting them with `-e` flags applies to a single deployment only and
+leaves the dashboard empty, which breaks the next deploy.
+
+That directory keeps its own tiny `requirements.txt` (`fastapi`, `livekit-api`,
+`python-dotenv`) so the serverless bundle stays small and cold starts stay fast.
+The agent's heavy ML dependencies are not needed there.
+
+---
+
+## WhatsApp calls
+
+A caller rings your WhatsApp Business number and the agent answers. The call
+travels over data rather than the phone network, so there is no carrier, no DID
+and no telephony regulation involved.
+
+### How it works
+
+```
+1. caller dials the WhatsApp Business number
+2. Meta POSTs a "call connect" webhook containing an SDP offer
+3. the webhook calls AcceptWhatsAppCall with that SDP
+4. LiveKit bridges the call into a room and dispatches the agent
+5. on hangup, DisconnectWhatsAppCall ends the WhatsApp leg
+```
+
+### Setup
+
+Meta App Dashboard, in this order:
+
+1. **WhatsApp -> API Setup** -> add your number under *Manage phone number list*
+   and verify the code (test numbers reach at most 5 verified recipients)
+2. **Phone number call settings** -> enable calling and set `call_hours`
+3. **Configuration -> Webhooks** -> callback URL `<your-url>/webhook`, plus the
+   verify token from `.env`
+4. **Webhook fields -> Manage** -> subscribe to **`calls`**
+5. **Subscribe your app to the WABA** (see below)
+
+> **The step that is easy to miss.** Meta has two separate subscription layers.
+> The webhook-fields toggle is app-level; the app must *also* be subscribed to
+> the WhatsApp Business Account:
+>
+> ```bash
+> curl -X POST "https://graph.facebook.com/v25.0/<WABA_ID>/subscribed_apps" \
+>   -H "Authorization: Bearer $WHATSAPP_ACCESS_TOKEN"
+> ```
+>
+> Without it, verification passes, manual tests appear to work, and real call
+> events are silently delivered only to Meta's own internal app. Check with
+> `GET /<WABA_ID>/subscribed_apps` - your app id must be listed.
+
+### Running the webhook locally
+
+```bash
+uv run python -m voice_agent.whatsapp     # listens on :8000
+ngrok http 8000                           # public URL for Meta
+```
+
+Set `WHATSAPP_APP_SECRET` to enable signature verification. Without it the code
+warns on every request and accepts anything, which is acceptable behind a
+temporary ngrok URL and not acceptable on a public one.
+
+### Direction support
+
+| Direction | Works? |
+|---|---|
+| User calls the agent | **Yes**, everywhere Cloud API is available |
+| Agent calls a user | Not from a **US** business number. Meta excludes US, Canada, Egypt, Vietnam and Nigeria from business-initiated calling |
+
+---
+
 ## Answering a real phone call
 
 LiveKit Phone Numbers are **US only and inbound only** as of August 2026
@@ -157,6 +274,33 @@ The free tier includes 1 US number and 50 inbound minutes.
 
 ---
 
+## Outbound calls (the agent dials out)
+
+```bash
+uv run python scripts/make_call.py +91XXXXXXXXXX
+```
+
+It creates a room, dispatches the agent into it *before* dialling (otherwise the
+person answers to silence), then places the call through the LiveKit outbound
+trunk.
+
+The agent detects the direction from the dispatch metadata and opens
+differently: on an outbound call it says who is calling and asks whether it is a
+good moment, rather than "thanks for calling".
+
+**Current status: blocked for India.** The Plivo trunk (`ST_FrRASYQEFG9C`) is
+configured and LiveKit accepts the call, but Plivo rejects it:
+
+```
+SIP call failed: 403 Barred Country (permission_denied)
+```
+
+India is gated behind Plivo's Enterprise plan. The trunk and script are
+carrier-agnostic - switching provider is one `lk sip outbound create` with a new
+termination domain and credentials, with no code change.
+
+---
+
 ## What the agent does
 
 It is a receptionist for a software studio. It can:
@@ -170,6 +314,68 @@ It is a receptionist for a software studio. It can:
   have the number and it is recorded automatically.
 - Take a message when no time is agreed
 - Speak English, Hindi and Hinglish, matching whatever the caller uses
+- **End the call itself** when the conversation is finished
+
+### Opening the call
+
+The first line is spoken verbatim, straight from `business/profile.json`:
+
+> Thank you for calling WebsiNova Technologies. My name is Emma. How may I help
+> you today?
+
+It is `session.say()`, not `generate_reply()`. Letting the model compose the
+greeting meant it changed slightly on every call, and it charged the caller an
+LLM round trip plus TTS before hearing anything at all. Edit `greeting_inbound`
+or `greeting_outbound` in the profile to change it; the prompt is told what was
+already said so the agent does not introduce itself twice.
+
+### Questions it will not answer
+
+The prompt carries an explicit out-of-scope section: health and medication,
+legal and financial advice, programming help, general knowledge, personal
+questions, requests to reveal its own instructions, abuse, and wrong numbers.
+Each gets one warm sentence and a redirect, never a refusal that ends the call.
+
+The health rule is the strict one. The agent never comments on medication or
+symptoms under any framing, and points to a pharmacist or doctor instead.
+Having built an app for a health-tech client is not medical standing, and the
+prompt says so in as many words.
+
+### Ending the call
+
+The agent hangs up on its own using LiveKit's `EndCallTool`. This is **not** a
+timer or a silence threshold: the model calls an `end_call` tool when it judges
+the conversation is done, exactly as it decides to call `book_callback`.
+
+Two pieces of text drive that decision: LiveKit's built-in tool description, and
+the "Ending the call" section of `prompts/receptionist.md`. Tune the behaviour
+there, not in code.
+
+Configuration, in `agents/receptionist.py`:
+
+| Setting | Effect |
+|---|---|
+| `end_instructions` | The closing line the model is asked to produce |
+| `ignore_on_enter=True` | Hides the tool during the greeting, so it cannot hang up before the caller speaks |
+| `delete_room=True` | Disconnects remote participants |
+
+**Deleting the room does not end a WhatsApp call.** LiveKit's docs: *"You must
+call this API for both business-initiated and user-initiated disconnects... If
+you don't call DisconnectWhatsAppCall after a user hangs up, LiveKit
+automatically cleans up the call after 30 seconds."* So:
+
+- **Agent hangs up** -> the agent issues a `BUSINESS_INITIATED` disconnect on
+  shutdown (this needs `WHATSAPP_ACCESS_TOKEN` in the agent's secrets)
+- **Caller hangs up** -> Meta sends a `terminate` webhook and the webhook issues
+  a `USER_INITIATED` disconnect, freeing the room instead of idling for 30s
+
+`WHATSAPP_HANGUP_GRACE_SECONDS` (default 2.0) delays the hangup after the
+session closes. Audio already handed to the transport is still travelling to the
+caller; disconnecting immediately clips the closing line. Raise it if the
+goodbye still sounds cut off.
+
+Note that `user_away_timeout` (15s) only marks the user as *away* - it never
+ends a session. Silence alone will not hang up.
 
 ### Where calls end up
 
@@ -198,6 +404,27 @@ lock. If the columns ever change, the old file is rotated to
 fields.
 
 ---
+
+### What the agent says, versus what it speaks
+
+LLM output passes through `tts_text_transforms` before the TTS sees it:
+`filter_markdown` and `filter_emoji` (the library's own), then
+`text_filters.strip_parentheticals`.
+
+The last one exists because `gpt-oss-120b` habitually appends a parenthetical
+gloss - "We can help with that (the caller sounds interested in mobile)". Every
+character of that is spoken aloud, including the half that was clearly the
+model talking to itself about the caller. The filter removes any bracketed span,
+tracks nesting, and tidies the spacing so "that (aside)." does not become
+"that .".
+
+It works on a live token stream, so a bracket split across chunks is the normal
+case, not an edge case. If a bracket never closes it gives up after 200
+characters and speaks the text anyway - going silent for the rest of a reply is
+the worse failure.
+
+The transcript keeps the original, unfiltered text. That is deliberate: it is
+how you tell what the model actually produced.
 
 ## Configuration
 
@@ -367,30 +594,44 @@ The same figures are written into each transcript JSON as `duration_seconds`,
 ```
 voice-agent/
 ├── agent.py                   entrypoint shim - `lk` looks for this
-├── livekit/dispatch-rule.json SIP dispatch rule
+├── Dockerfile                 LiveKit Cloud build (3 fixes, see Running it hosted)
+├── livekit.toml               pins the deployed agent id
+├── livekit/
+│   ├── dispatch-rule.json     inbound SIP dispatch rule
+│   └── outbound-trunk.json    outbound trunk config (no secrets)
+├── scripts/make_call.py       place an outbound call
+├── deploy/webhook/            SEPARATE Vercel project for the WhatsApp webhook
+│   ├── main.py                self-contained FastAPI app
+│   ├── wa/payload.py          Meta payload parser
+│   └── requirements.txt       3 deps only, keeps the bundle small
 ├── src/voice_agent/
-│   ├── main.py                AgentServer, prewarm, job entrypoint
-│   ├── session.py             pipeline decisions: turn detection, interruption
+│   ├── main.py                AgentServer, prewarm, entrypoint, shutdown
+│   ├── session.py             pipeline: turn detection, interruption, endpointing
 │   ├── config.py              env -> typed Settings, fails loudly and early
 │   ├── pricing.py             list prices, each with source and date checked
 │   ├── providers/             the ONLY place models are constructed
-│   │   ├── stt.py             picks STTv2 for Flux models, STT otherwise
+│   │   ├── stt.py             STTv2 for Flux models, STT otherwise
 │   │   ├── llm.py
 │   │   ├── tts.py             deepgram | rumik | cartesia
 │   │   └── vad.py
-│   ├── agents/receptionist.py the agent: instructions + @function_tool methods
-│   ├── prompts/receptionist.md behaviour, as an editable template
+│   ├── agents/receptionist.py the agent: instructions, tools, EndCallTool
+│   ├── prompts/receptionist.md behaviour, booking flow, when to end the call
 │   ├── business/
 │   │   ├── profile.py         loads the two JSON files below
-│   │   ├── profile.json       facts about the business
+│   │   ├── profile.json       business facts
 │   │   └── faq.json           16 spoken-style Q&A pairs
+│   ├── whatsapp/
+│   │   ├── webhook.py         local dev webhook (FastAPI)
+│   │   ├── payload.py         Meta `calls` payload parser
+│   │   ├── disconnect.py      hangs up the WhatsApp leg
+│   │   └── __main__.py        `python -m voice_agent.whatsapp`
 │   ├── storage/
 │   │   ├── leads.py           CSV append, locked, schema-rotating
 │   │   └── transcripts.py     per-call JSON
 │   └── observability/
 │       ├── metrics.py         per-turn latency breakdown
 │       └── usage.py           session cost summary, printed on hangup
-└── tests/                     82 tests, no network calls
+└── tests/                     143 tests, no network calls
 ```
 
 **The one structural rule:** models are constructed in `providers/` and nowhere
@@ -428,7 +669,7 @@ the type hints become the argument schema. See `book_callback`.
 ## Development
 
 ```bash
-uv run pytest          # 82 tests, no network calls
+uv run pytest          # 143 tests, no network calls
 uv run ruff check .    # lint
 ```
 
@@ -459,3 +700,32 @@ work:
 
 You would get a demo working in a day, then spend months rediscovering these one
 at a time. That is why LiveKit Agents and Pipecat exist as separate projects.
+
+---
+
+## Known limitations
+
+- **Outbound calling to India is blocked.** Plivo gates India behind Enterprise
+  (`403 Barred Country`). Every route to an Indian number needs Indian business
+  KYC (DoT regulation), which is provider-independent, so switching CPaaS does
+  not avoid it.
+- **LiveKit phone numbers are US-only and inbound-only.** Outbound needs a BYO
+  SIP trunk.
+- **WhatsApp business-initiated calls need a non-US business number.** Meta
+  excludes US, Canada, Egypt, Vietnam and Nigeria. User-initiated calls work
+  everywhere Cloud API is available, which is the direction a receptionist needs.
+- **The deployed agent's `data/` is ephemeral.** Leads captured by the cloud
+  agent are lost on restart or redeploy. Persisting them needs an external sink.
+- **The WhatsApp webhook exists in two copies** - `src/voice_agent/whatsapp/`
+  for local development and `deploy/webhook/` for Vercel, kept dependency-light
+  on purpose. Changes must be applied to both; a test asserts both handle
+  `terminate`.
+- **`caller_number` capture is unverified for SIP.** The SDK exposes no constant
+  for the SIP caller attribute, so the code scans participant attributes for
+  something phone-shaped. The WhatsApp path passes the call id explicitly and is
+  exercised.
+- **Sarvam is not wired in.** Deepgram Flux covers Hindi but no other Indian
+  language, so Tamil, Telugu, Marathi and Bengali are out of scope for now.
+- **The Meta app is on Cloud API v26.0**, while LiveKit documents support for
+  v23.0-v25.0. We send `25.0`. Not currently causing problems, but worth knowing
+  if calls start failing at the accept step.

@@ -1,10 +1,13 @@
 {
   "_comment": "DEMO CONTENT. Grounded in real WebsiNova work (Karyalo, Cloei/ChooseMyCar) but written for a portfolio demo. Review every line before this is ever used with a real prospect.",
   "business_name": "WebsiNova Technologies",
-  "agent_name": "Nova",
+  "agent_name": "Emma",
+  "_greeting_comment": "Spoken verbatim by session.say() the moment the call connects, so it is identical every time and costs no LLM round trip. Keep it to one breath.",
+  "greeting_inbound": "Thank you for calling WebsiNova Technologies. My name is Emma. How may I help you today?",
+  "greeting_outbound": "Hello, this is Emma calling from WebsiNova Technologies. Is now a good moment to talk?",
   "industry": "software development studio",
   "location": "Mumbai, India",
-  "hours": "Monday to Friday, 10am to 7pm India time",
+  "hours": "Monday to Friday, 9am to 7pm India time",
   "founded": "We have been building products together since 2021.",
   "team": "A small hand-picked team of designers, engineers and AI specialists, led by Vinay Jain, Co-founder.",
   "services": [

@@ -20,15 +20,47 @@ logger = logging.getLogger(__name__)
 BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
 
 
-INBOUND_OPENING = """Greet the caller, say which business they have reached and
-your name, then ask how you can help. Keep it under two sentences."""
+# The greeting is spoken verbatim rather than generated. A model-written opening
+# varied on every call, and cost an LLM round trip plus TTS at the one moment a
+# caller is least willing to hear silence. These say what has *already* been
+# said, so the model does not greet a second time.
+INBOUND_OPENING = """The call has just connected and you have ALREADY said this
+out loud, word for word:
 
-OUTBOUND_OPENING = """You placed this call, so they are not expecting you. Open
-by saying your name and the business, say briefly why you are calling, and ask
-if it is a good moment to talk. Keep it under two sentences.
+    "{greeting}"
 
-If they say it is a bad time, offer to call back and ask when suits them. Do not
-push."""
+Do not greet again, do not introduce yourself again, and do not repeat the
+question. Say nothing further. Wait for the caller to speak, then answer what
+they actually asked."""
+
+OUTBOUND_OPENING = """You placed this call, so they are not expecting you. You
+have ALREADY said this out loud, word for word:
+
+    "{greeting}"
+
+Do not greet again and do not repeat the question. Wait for their answer.
+
+If they say it is a good moment, say briefly why you are calling. If they say it
+is a bad time, offer to call back and ask when suits them. Do not push."""
+
+
+def opening_line(profile: BusinessProfile, *, outbound: bool = False) -> str:
+    """The exact words spoken as the call connects.
+
+    Content, not code: edit business/profile.json. Falls back to a plain line
+    built from the profile so a missing key cannot leave a caller in silence.
+    """
+    key = "greeting_outbound" if outbound else "greeting_inbound"
+    try:
+        greeting = str(profile[key]).strip()
+    except KeyError:
+        greeting = ""
+    if greeting:
+        return greeting
+    return (
+        f"Thank you for calling {profile['business_name']}. "
+        f"My name is {profile['agent_name']}. How may I help you today?"
+    )
 
 
 def build_prompt_variables(
@@ -36,8 +68,9 @@ def build_prompt_variables(
 ) -> dict[str, str]:
     """Business facts plus the things only known at call time."""
     variables = profile.as_prompt_vars()
-    variables["opening_instructions"] = (
-        OUTBOUND_OPENING if outbound else INBOUND_OPENING
+    template = OUTBOUND_OPENING if outbound else INBOUND_OPENING
+    variables["opening_instructions"] = template.format(
+        greeting=opening_line(profile, outbound=outbound)
     )
 
     # The model has no idea what today is. Without this it invents dates when a
@@ -51,6 +84,39 @@ def build_prompt_variables(
     variables["languages"] = settings.language.spoken_languages
 
     return variables
+
+
+END_CALL_CONDITIONS = """
+Before calling this, you MUST have asked "is there anything else I can help you
+with?" and the caller must have answered no. If you have not asked that yet, do
+not call this tool - ask it as a normal reply instead and wait for their answer.
+
+Never call this while the caller is mid-sentence, has just asked a question, or
+has gone quiet. Silence is not consent to hang up. If you are unsure whether
+they are finished, do not call this tool.
+"""
+
+
+async def _log_end_call(event: object) -> None:
+    """Record what the call looked like at the moment the model hung up.
+
+    A caller reporting "it cut me off" is unfalsifiable from the metrics alone:
+    an agent-initiated hangup and the caller hanging up produce almost the same
+    log tail. Printing the last few turns here makes the difference visible in
+    `lk agent logs` without needing the transcript file, which on LiveKit Cloud
+    lives on an ephemeral disk.
+    """
+    try:
+        history = event.ctx.session.history  # type: ignore[attr-defined]
+        tail = []
+        for item in list(history.items)[-6:]:
+            role = getattr(item, "role", "?")
+            text = (getattr(item, "text_content", "") or "").strip()
+            if text:
+                tail.append(f"{role}: {text}")
+        logger.info("end_call requested by the model | recent turns: %s", " | ".join(tail))
+    except Exception:
+        logger.warning("end_call requested by the model (could not read history)", exc_info=True)
 
 
 class ReceptionistAgent(Agent):
@@ -74,18 +140,28 @@ class ReceptionistAgent(Agent):
             ),
             tools=[
                 EndCallTool(
+                    # Conditions live here as well as in the prompt because this
+                    # text is in the tool schema, right where the model makes
+                    # the decision. Prompt rules many turns back lose to it.
+                    extra_description=END_CALL_CONDITIONS,
                     # The model says this closing line first; the session shuts
                     # down only once that speech has finished playing.
                     end_instructions=(
                         "Say a short, warm goodbye. One sentence. Do not ask "
                         "another question."
                     ),
-                    # Disconnects every remote participant, including SIP and
-                    # WhatsApp callers, so the caller's phone actually hangs up.
-                    delete_room=True,
+                    # Deliberately False. The library would register its own
+                    # shutdown callback to delete the room, and shutdown
+                    # callbacks all run together under asyncio.gather - so it
+                    # raced ours, tore the room down while the goodbye audio was
+                    # still in flight, and left DisconnectWhatsAppCall with no
+                    # participant to disconnect (404). main.py now drains, hangs
+                    # up the WhatsApp leg, and deletes the room, in that order.
+                    delete_room=False,
                     # Without this the model could end the call during its own
                     # greeting, before the caller has said anything.
                     ignore_on_enter=True,
+                    on_tool_called=_log_end_call,
                 ),
             ],
         )

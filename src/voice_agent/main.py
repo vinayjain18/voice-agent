@@ -25,6 +25,7 @@ from livekit.agents import AgentServer, JobContext, JobProcess
 # any other thread, and job runners execute in worker threads - so this import
 # must stay at module level. See providers/stt.py.
 from voice_agent.agents import ReceptionistAgent
+from voice_agent.agents.receptionist import opening_line
 from voice_agent.config import Settings
 from voice_agent.observability import attach_metrics_logging, log_session_summary
 from voice_agent.providers import build_vad
@@ -118,20 +119,20 @@ async def entrypoint(ctx: JobContext) -> None:
 
     started_at = time.monotonic()
 
-    await session.start(
-        ReceptionistAgent(settings=settings, outbound=outbound), room=ctx.room
-    )
+    agent = ReceptionistAgent(settings=settings, outbound=outbound)
+    await session.start(agent, room=ctx.room)
     await ctx.connect()
 
     async def _on_shutdown() -> None:
-        """Hang up the WhatsApp leg, then log usage and save the transcript.
+        """Log usage, save the transcript, then tear the call down.
 
         Runs when the caller hangs up, when the agent ends the call itself, when
         the LiveKit console ends the session, and on Ctrl+C in terminal mode.
         """
         # Deleting the LiveKit room does not end the WhatsApp call: without an
         # explicit disconnect the caller hears silence until LiveKit's 30 second
-        # cleanup. Capture the id now, but hang up LAST - see below.
+        # cleanup. Read the id while the participant is still there; the actual
+        # hangup happens at the end of this callback.
         call_id = find_whatsapp_call_id(ctx.room)
 
         duration = time.monotonic() - started_at
@@ -156,23 +157,41 @@ async def entrypoint(ctx: JobContext) -> None:
                 },
             )
 
-        # Hang up only after the bookkeeping above, plus a short grace period.
-        # Audio handed to the transport is still in flight to the caller's phone
-        # when the session closes; disconnecting immediately clips the agent's
-        # closing line. Shutdown callbacks run concurrently (asyncio.gather), so
-        # this ordering is the only control we have over when the leg drops.
+        # Tear the call down only after the bookkeeping above, plus a short
+        # grace period. Audio handed to the transport is still in flight to the
+        # caller's phone when the session closes, so dropping the leg
+        # immediately clips the agent's closing line.
+        #
+        # EndCallTool used to delete the room itself, from a second shutdown
+        # callback. Callbacks all run together under asyncio.gather, so that
+        # one raced this: the room went away while the goodbye was still
+        # playing, and the WhatsApp disconnect below then had no participant
+        # left to act on (404 participant does not exist). It is now built with
+        # delete_room=False and the whole teardown happens here, in order.
+        grace = max(0.0, settings.whatsapp.hangup_grace_seconds)
+        if grace:
+            await asyncio.sleep(grace)
+
+        # WhatsApp first: it needs the participant to still exist.
         if call_id:
-            grace = max(0.0, settings.whatsapp.hangup_grace_seconds)
-            if grace:
-                await asyncio.sleep(grace)
             await disconnect_whatsapp_call(call_id, settings.whatsapp.access_token)
+
+        # Then the room, which is what disconnects a SIP caller. Harmless for
+        # console and browser sessions, where the room is already going away.
+        try:
+            await ctx.delete_room()
+        except Exception:
+            logger.debug("could not delete room %s", ctx.room.name, exc_info=True)
 
     ctx.add_shutdown_callback(_on_shutdown)
 
-    # Let the model produce the greeting from its own instructions rather than
-    # hardcoding a line here, so the opening stays in the prompt where it can be
-    # edited without a code change.
+    # Speak the opening verbatim instead of asking the model to compose one.
+    # A generated greeting varied call to call and put an LLM round trip plus
+    # TTS in front of the caller's very first second, which is exactly where
+    # dead air is least forgivable. The text lives in business/profile.json, so
+    # this is still a content change, not a code change.
+    #
+    # add_to_chat_ctx defaults to True, so the model sees the greeting as its
+    # own first turn and does not repeat it.
     logger.info("call direction: %s", "outbound" if outbound else "inbound")
-    await session.generate_reply(
-        instructions="Open the call according to your opening instructions."
-    )
+    await session.say(opening_line(agent.profile, outbound=outbound))

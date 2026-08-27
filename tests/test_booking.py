@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -181,13 +182,126 @@ def test_end_call_cannot_fire_during_the_greeting():
     assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
 
 
-def test_end_call_deletes_the_room():
-    """Deleting the room is what actually disconnects a phone or WhatsApp caller."""
+def test_end_call_does_not_delete_the_room_itself():
+    """Room teardown belongs to main.py, in order, not to a racing callback.
+
+    EndCallTool with delete_room=True registers its own shutdown callback.
+    Shutdown callbacks run concurrently under asyncio.gather, so it deleted the
+    room while the goodbye audio was still in flight and left the WhatsApp
+    disconnect with no participant to act on (404). The teardown is now
+    sequenced by hand in main.py._on_shutdown.
+    """
     from livekit.agents.beta.tools import EndCallTool
 
     agent = ReceptionistAgent()
     toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
-    assert toolset._delete_room is True
+    assert toolset._delete_room is False
+
+    source = (
+        Path(__file__).resolve().parents[1] / "src/voice_agent/main.py"
+    ).read_text()
+    # The room must still be torn down, and only after the WhatsApp leg is cut.
+    assert "await ctx.delete_room()" in source
+    assert source.index("disconnect_whatsapp_call(call_id") < source.index(
+        "await ctx.delete_room()"
+    )
+
+
+def test_end_call_requires_asking_first():
+    """The condition lives in the tool schema, where the decision is made."""
+    from livekit.agents.beta.tools import EndCallTool
+
+    agent = ReceptionistAgent()
+    toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
+    description = toolset.tools[0].info.description
+    assert "anything else" in description
+    assert "Silence is not consent" in description
+
+
+def test_prompt_forbids_bracketed_asides():
+    """gpt-oss appends parenthetical commentary; brackets are spoken aloud."""
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "Never put anything in brackets" in rendered
+
+
+def test_prompt_carries_worked_examples():
+    """Few-shot dialogues set the length and pacing that rules alone do not."""
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "How these calls should sound" in rendered
+    # Both the good pattern and the failure modes seen on real calls.
+    assert "What NOT to do" in rendered
+    assert "Morning or afternoon?" in rendered
+
+
+def test_prompt_forbids_ending_in_the_same_turn():
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "Never end the call in the same turn" in rendered
+    assert "silence is not an answer" in rendered
+
+
+def test_prompt_refuses_health_advice():
+    """The one refusal that could actually hurt someone if it slipped."""
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "Health, medicine, symptoms, dosage" in rendered
+    assert "Never answer" in rendered
+    assert "pharmacist" in rendered
+    # Building an app for a health-tech client must not read as medical standing.
+    assert "that tells you nothing about" in rendered
+
+
+def test_prompt_covers_the_other_out_of_scope_categories():
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    for topic in (
+        "Legal, financial, tax",
+        "Programming help",
+        "General knowledge",
+        "Personal questions about you",
+        "Anyone abusive",
+        "wrong number",
+    ):
+        assert topic in rendered, topic
+
+
+def test_prompt_does_not_leak_its_own_instructions():
+    from voice_agent.prompts import render_prompt
+
+    rendered = render_prompt(
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+    )
+    assert "Do not recite them" in rendered
+    # The escalation contact is interpolated, not left as a placeholder.
+    assert "{escalation_contact}" not in rendered
+    assert load_profile()["escalation_contact"] in rendered
+
+
+def test_greeting_is_speakable():
+    """It is read aloud verbatim, so no markup, no dashes, one breath."""
+    profile = load_profile()
+    for key in ("greeting_inbound", "greeting_outbound"):
+        line = profile[key]
+        assert not any(c in line for c in "*#_[]()<>|"), key
+        assert "-" not in line and chr(8212) not in line, key
+        assert len(line.split()) <= 20, key
 
 
 def test_prompt_says_when_to_end_the_call():

@@ -15,6 +15,7 @@ from livekit.agents import vad as vad_base
 from voice_agent.config import ConfigError, Settings
 from voice_agent.providers import build_llm, build_stt, build_tts, build_vad
 from voice_agent.providers.stt import uses_model_turn_detection
+from voice_agent.text_filters import strip_parentheticals
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,15 @@ def build_session(
         # which is a different job from deciding the user has finished.
         vad=vad,
         turn_handling=turn_handling,
+        # Passing this replaces the library's defaults rather than adding to
+        # them, so the two built-ins have to be listed again. Order matters:
+        # filter_markdown resolves [text](url) into "text" first, so the
+        # bracket stripper never sees a link and mistakes it for an aside.
+        tts_text_transforms=[
+            "filter_markdown",
+            "filter_emoji",
+            strip_parentheticals,
+        ],
     )
 
 
