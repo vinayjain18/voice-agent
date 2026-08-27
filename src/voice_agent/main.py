@@ -27,7 +27,11 @@ from livekit.agents import AgentServer, JobContext, JobProcess
 from voice_agent.agents import ReceptionistAgent
 from voice_agent.agents.receptionist import opening_line
 from voice_agent.config import Settings
-from voice_agent.observability import attach_metrics_logging, log_session_summary
+from voice_agent.observability import (
+    attach_conversation_logging,
+    attach_metrics_logging,
+    log_session_summary,
+)
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
 from voice_agent.storage import save_transcript
@@ -116,6 +120,10 @@ async def entrypoint(ctx: JobContext) -> None:
     session = build_session(settings, vad=ctx.proc.userdata.get("vad"))
     if settings.log_metrics:
         attach_metrics_logging(session)
+    if settings.log_transcript:
+        attach_conversation_logging(
+            session, include_interim=settings.log_interim_transcript
+        )
 
     started_at = time.monotonic()
 

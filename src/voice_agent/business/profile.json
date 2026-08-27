@@ -8,7 +8,7 @@
   "industry": "software development studio",
   "location": "Mumbai, India",
   "hours": "Monday to Friday, 9am to 7pm India time",
-  "founded": "We have been building products together since 2021.",
+  "founded": "We've been building products together since 2021.",
   "team": "A small hand-picked team of designers, engineers and AI specialists, led by Vinay Jain, Co-founder.",
   "services": [
     "AI agents and voice assistants",
@@ -22,7 +22,7 @@
   "tech_stack": "Python, FastAPI, Next.js, React, React Native, TypeScript, Node, Postgres, MongoDB, and AWS. For AI work we use the major model providers rather than betting on one.",
   "process": "Four steps. A short discovery call, then a written scope with a fixed price and timeline, then build in weekly demos so you see progress, then launch with a handover and a support window.",
   "engagement_model": "Most projects are fixed scope and fixed price, paid in milestones, typically forty percent to start and the rest on agreed checkpoints. Longer programmes can run as a monthly retainer.",
-  "pricing_policy": "Pricing depends entirely on scope, so we do not quote on a first call. After a short discovery conversation we send a written quotation with a fixed price and timeline. Most engagements start with a paid discovery if the scope is unclear.",
+  "pricing_policy": "Pricing depends entirely on scope, so we don't quote on a first call. After a short discovery conversation we send a written quotation with a fixed price and timeline. Most engagements start with a paid discovery if the scope is unclear.",
   "timelines": "A marketing site is usually two to four weeks. A working AI agent or automation is typically four to eight weeks. A full product build runs three months or more, shipped in stages so you have something usable early.",
   "support": "Every launch includes a thirty day support window for fixes. After that most clients move to a small monthly retainer for maintenance, monitoring and improvements.",
   "confidentiality": "We sign NDAs as a matter of course, and the client owns all the code and IP on final payment.",

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import csv
-from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -80,7 +80,7 @@ async def test_booking_records_caller_number_silently(agent, tmp_path):
             preferred_time="15:00", reason="voice agent",
             raw_request="next Tuesday at 3",
         )
-    assert "Booked" in result
+    assert "Saved" in result
     row = _rows(tmp_path)[0]
     assert row["kind"] == "booking"
     assert row["contact"] == "+919876543210"
@@ -139,7 +139,7 @@ async def test_booking_works_without_a_caller_number(agent, tmp_path):
             None, name="Raj", preferred_date="2026-08-25",
             preferred_time="15:00", reason="x",
         )
-    assert "Booked" in result
+    assert "Saved" in result
     assert _rows(tmp_path)[0]["contact"] == ""
 
 
@@ -161,61 +161,134 @@ async def test_message_saved_with_justification(agent, tmp_path):
 
 # --- ending the call --------------------------------------------------------
 
-def test_agent_has_the_end_call_tool():
-    """Without it the caller is left on a silent line after the booking."""
-    from livekit.agents.beta.tools import EndCallTool
+@pytest.mark.asyncio
+async def test_booking_is_confirmed_in_the_callers_own_words(agent):
+    """A caller who said "two PM South African time" must not hear "five thirty".
 
-    agent = ReceptionistAgent()
-    toolsets = [t for t in agent._tools if isinstance(t, EndCallTool)]
-    assert toolsets, "EndCallTool is not registered"
-    assert "end_call" in [t.info.name for t in toolsets[0].tools]
-
-
-def test_end_call_cannot_fire_during_the_greeting():
-    """ignore_on_enter stops the model hanging up while saying hello."""
-    from livekit.agents.beta.tools import EndCallTool
-    from livekit.agents.llm import ToolFlag
-
-    agent = ReceptionistAgent()
-    toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
-    tool = toolset.tools[0]
-    assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
-
-
-def test_end_call_does_not_delete_the_room_itself():
-    """Room teardown belongs to main.py, in order, not to a racing callback.
-
-    EndCallTool with delete_room=True registers its own shutdown callback.
-    Shutdown callbacks run concurrently under asyncio.gather, so it deleted the
-    room while the goodbye audio was still in flight and left the WhatsApp
-    disconnect with no participant to act on (404). The teardown is now
-    sequenced by hand in main.py._on_shutdown.
+    The CSV keeps India time so a human can act on it. The caller hears what
+    they actually said, otherwise they cannot tell they were understood.
     """
-    from livekit.agents.beta.tools import EndCallTool
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", "+919876543210"),
+    ):
+        result = await agent.book_callback(
+            None,
+            name="Ravi",
+            preferred_date="2026-08-27",
+            preferred_time="17:30",
+            reason="CRM",
+            raw_request="today at two PM South African time",
+        )
+    assert "today at two PM South African time" in result
+    assert "17:30" not in result
+    assert "India time" not in result.replace("do not say India time", "")
+    # And it must not close the call in the same breath.
+    assert "Do not end the call in this reply." in result
 
-    agent = ReceptionistAgent()
-    toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
-    assert toolset._delete_room is False
 
-    source = (
-        Path(__file__).resolve().parents[1] / "src/voice_agent/main.py"
-    ).read_text()
-    # The room must still be torn down, and only after the WhatsApp leg is cut.
-    assert "await ctx.delete_room()" in source
-    assert source.index("disconnect_whatsapp_call(call_id") < source.index(
-        "await ctx.delete_room()"
+@pytest.mark.asyncio
+async def test_booking_falls_back_to_the_stored_time_if_nothing_was_quoted(agent):
+    with patch(
+        "voice_agent.agents.receptionist._call_identity",
+        return_value=("call-1", ""),
+    ):
+        result = await agent.book_callback(
+            None, name="Raj", preferred_date="2026-08-25",
+            preferred_time="15:00", reason="x",
+        )
+    assert "2026-08-25 at 15:00" in result
+
+
+def _run_context_with_last_user_turn(text):
+    """A RunContext stub whose history ends with the caller saying `text`.
+
+    `text=None` means the caller has not spoken at all.
+    """
+    items = [SimpleNamespace(role="assistant", text_content="Anything else you needed?")]
+    if text is not None:
+        items.append(SimpleNamespace(role="user", text_content=text))
+    session = MagicMock()
+    session.history.items = items
+    session.shutdown = MagicMock()
+    session.once = MagicMock()
+    return SimpleNamespace(session=session, speech_handle=MagicMock())
+
+
+def test_agent_has_an_end_call_tool():
+    """It is a plain function tool now, not EndCallTool.
+
+    EndCallTool commits the shutdown inside the tool call itself, before any
+    hook can run, so its ending could not be vetoed. A real call showed the
+    cost: the agent asked "anything else you needed?", said goodbye and hung up
+    in one breath, and the caller was cut off mid-question.
+    """
+    names = set()
+    for tool in ReceptionistAgent()._tools:
+        name = getattr(getattr(tool, "info", None), "name", None)
+        if name:
+            names.add(name)
+    assert "end_call" in names
+    assert "book_callback" in names
+
+
+@pytest.mark.asyncio
+async def test_end_call_refuses_when_the_caller_was_not_finished(agent):
+    """The exact turn that broke a real call."""
+    ctx = _run_context_with_last_user_turn(
+        "You can set it up today at two PM South African time"
     )
+    result = await agent.end_call(ctx)
+    assert "Not yet" in result
+    assert ctx.session.shutdown.called is False
 
 
-def test_end_call_requires_asking_first():
-    """The condition lives in the tool schema, where the decision is made."""
-    from livekit.agents.beta.tools import EndCallTool
+@pytest.mark.asyncio
+async def test_end_call_refuses_a_cut_off_question(agent):
+    """"Can you confirm what is" is a caller starting to speak, not a goodbye."""
+    ctx = _run_context_with_last_user_turn("Can you confirm what is")
+    result = await agent.end_call(ctx)
+    assert "Not yet" in result
+    assert ctx.session.shutdown.called is False
 
-    agent = ReceptionistAgent()
-    toolset = next(t for t in agent._tools if isinstance(t, EndCallTool))
-    description = toolset.tools[0].info.description
-    assert "anything else" in description
-    assert "Silence is not consent" in description
+
+@pytest.mark.asyncio
+async def test_end_call_refuses_when_the_caller_has_not_spoken_at_all(agent):
+    ctx = _run_context_with_last_user_turn(None)
+    assert "Not yet" in await agent.end_call(ctx)
+    assert ctx.session.shutdown.called is False
+
+
+@pytest.mark.asyncio
+async def test_end_call_proceeds_once_the_caller_says_no(agent):
+    ctx = _run_context_with_last_user_turn("No, that's all thanks")
+    result = await agent.end_call(ctx)
+    assert "Not yet" not in result
+    # The goodbye is the tool's output, and shutdown waits for it to be spoken.
+    assert "Thank them for calling" in " ".join(result.split())
+    assert ctx.speech_handle.add_done_callback.called is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_the_goodbye_to_finish(agent):
+    """Shutting down immediately would clip the closing line."""
+    ctx = _run_context_with_last_user_turn("no thanks")
+    await agent.end_call(ctx)
+    ctx.session.shutdown.assert_not_called()
+
+    # Fire the speech-finished callback the tool registered.
+    callback = ctx.speech_handle.add_done_callback.call_args[0][0]
+    callback(ctx.speech_handle)
+    ctx.session.shutdown.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_outbound_gets_the_outbound_goodbye():
+    from voice_agent.agents.receptionist import OUTBOUND_GOODBYE
+
+    agent = ReceptionistAgent(outbound=True)
+    ctx = _run_context_with_last_user_turn("no thanks")
+    assert await agent.end_call(ctx) == OUTBOUND_GOODBYE
 
 
 def test_prompt_forbids_bracketed_asides():
@@ -312,3 +385,94 @@ def test_prompt_says_when_to_end_the_call():
     )
     assert "end_call" in rendered
     assert "anything else" in rendered
+
+
+def test_noise_turns_are_discarded():
+    """Deepgram flushes unusable audio as an empty turn; replying to it makes
+    the agent talk into silence and stack questions."""
+    from voice_agent.agents.receptionist import is_noise_turn
+
+    for noise in ("", "   ", "...", "uh", "um", "umm", "er", "Uh, um"):
+        assert is_noise_turn(noise) is True, noise
+
+
+def test_real_speech_is_never_discarded():
+    """Over-filtering is the worse failure: it drops a real answer silently."""
+    from voice_agent.agents.receptionist import is_noise_turn
+
+    for speech in (
+        "yes", "no", "Rajesh", "two PM", "hmm", "mm", "mhm", "haan",
+        "uh, two pm", "ok", "9", "Thursday",
+    ):
+        assert is_noise_turn(speech) is False, speech
+
+
+@pytest.mark.asyncio
+async def test_agent_raises_stop_response_on_a_noise_turn():
+    from livekit.agents import ChatContext, ChatMessage, StopResponse
+
+    agent = ReceptionistAgent()
+    empty = ChatMessage(role="user", content=[""])
+    with pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(ChatContext(), empty)
+
+
+@pytest.mark.asyncio
+async def test_agent_lets_a_real_turn_through():
+    from livekit.agents import ChatContext, ChatMessage
+
+    agent = ReceptionistAgent()
+    real = ChatMessage(role="user", content=["you can do it at two PM"])
+    assert await agent.on_user_turn_completed(ChatContext(), real) is None
+
+
+@pytest.mark.asyncio
+async def test_the_full_closing_flow_for_no_nothing(agent):
+    """The whole ending, in order, for the answer a caller actually gives.
+
+    Caller says "no nothing" -> agent says one goodbye -> call drops. Each step
+    is asserted rather than assumed, because every one of them has broken at
+    least once: the turn being discarded as noise, the hangup firing before the
+    caller answered, and the goodbye being cut off by an early shutdown.
+    """
+    from voice_agent.agents.receptionist import caller_sounds_finished, is_noise_turn
+
+    answer = "no nothing"
+
+    # 1. It is real speech, so it is not thrown away as noise.
+    assert is_noise_turn(answer) is False
+
+    # 2. It reads as a sign-off, so the call is allowed to end.
+    assert caller_sounds_finished(answer) is True
+
+    # 3. end_call is permitted, and returns the goodbye for the model to say.
+    ctx = _run_context_with_last_user_turn(answer)
+    result = await agent.end_call(ctx)
+    assert "Not yet" not in result
+    normalised = " ".join(result.split())
+    assert "Thank them for calling" in normalised
+    assert "ONE short sentence" in normalised
+
+    # 4. Nothing has been torn down yet: the goodbye has not been spoken.
+    ctx.session.shutdown.assert_not_called()
+
+    # 5. Shutdown is deferred until this turn's speech finishes. The tool reply
+    #    reuses the same speech handle, so that includes the goodbye itself.
+    ctx.speech_handle.add_done_callback.assert_called_once()
+    on_speech_finished = ctx.speech_handle.add_done_callback.call_args[0][0]
+
+    # 6. Once the goodbye has played, and only then, the session shuts down.
+    on_speech_finished(ctx.speech_handle)
+    ctx.session.shutdown.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_variations_of_no_all_close_the_call(agent):
+    """Callers do not say "no" the same way twice."""
+    from voice_agent.agents.receptionist import caller_sounds_finished
+
+    for answer in (
+        "no nothing", "no", "nope", "no thanks", "no that's all",
+        "nothing else", "that's it", "nahi", "no I'm good", "all good thanks",
+    ):
+        assert caller_sounds_finished(answer) is True, answer

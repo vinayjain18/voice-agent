@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from livekit.agents import Agent, RunContext, function_tool, get_job_context
-from livekit.agents.beta.tools import EndCallTool
+from livekit.agents import (
+    Agent,
+    ChatContext,
+    ChatMessage,
+    RunContext,
+    StopResponse,
+    function_tool,
+    get_job_context,
+)
 
 from voice_agent.business import BusinessProfile, load_profile
 from voice_agent.config import Settings
@@ -42,6 +50,26 @@ Do not greet again and do not repeat the question. Wait for their answer.
 
 If they say it is a good moment, say briefly why you are calling. If they say it
 is a bad time, offer to call back and ask when suits them. Do not push."""
+
+
+# What the model is told to say once end_call fires. It is the last thing the
+# caller hears, so it is specified rather than left to "say goodbye": vague
+# instructions produced either nothing at all or a four sentence farewell that
+# ran past the hangup. One sentence, and direction-aware, because thanking
+# someone for calling when we rang them is an obvious tell.
+INBOUND_GOODBYE = """Close the call in ONE short sentence. Thank them for
+calling and wish them well. Vary the wording rather than saying the same line
+every time, for example "Thanks for calling, have a good day.", "Thanks for
+calling us, take care.", or "Lovely, thanks for calling. Have a good one."
+
+Say nothing else. Do not ask another question, do not recap the booking, and do
+not add a second sentence."""
+
+OUTBOUND_GOODBYE = """Close the call in ONE short sentence. Thank them for their
+time and wish them well, for example "Thanks for your time, have a good day."
+
+Never thank them for calling - you called them. Say nothing else, and do not ask
+another question."""
 
 
 def opening_line(profile: BusinessProfile, *, outbound: bool = False) -> str:
@@ -86,37 +114,76 @@ def build_prompt_variables(
     return variables
 
 
-END_CALL_CONDITIONS = """
-Before calling this, you MUST have asked "is there anything else I can help you
-with?" and the caller must have answered no. If you have not asked that yet, do
-not call this tool - ask it as a normal reply instead and wait for their answer.
-
-Never call this while the caller is mid-sentence, has just asked a question, or
-has gone quiet. Silence is not consent to hang up. If you are unsure whether
-they are finished, do not call this tool.
-"""
+# Pure hesitation noises. Deliberately does NOT include "hmm", "mm" or "mhm":
+# those are often a real answer to a yes/no question, and discarding them would
+# leave the caller thinking they had replied.
+HESITATION_ONLY = frozenset({"uh", "uhh", "um", "umm", "er", "err", "erm"})
 
 
-async def _log_end_call(event: object) -> None:
-    """Record what the call looked like at the moment the model hung up.
+def is_noise_turn(text: str) -> bool:
+    """True when a user turn carries no actual speech.
 
-    A caller reporting "it cut me off" is unfalsifiable from the metrics alone:
-    an agent-initiated hangup and the caller hanging up produce almost the same
-    log tail. Printing the last few turns here makes the difference visible in
-    `lk agent logs` without needing the transcript file, which on LiveKit Cloud
-    lives on an ephemeral disk.
+    Deepgram flushes a turn when the VAD hears something the model cannot
+    transcribe - a cough, line noise, a half word. That arrives as an empty or
+    near-empty transcript, and answering it makes the agent talk into silence.
     """
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    # Punctuation or stray marks with no letters or digits anywhere.
+    if not any(char.isalnum() for char in stripped):
+        return True
+    words = [w.strip(".,!?;:'\"").lower() for w in stripped.split()]
+    words = [w for w in words if w]
+    return bool(words) and all(word in HESITATION_ONLY for word in words)
+
+
+# Short things a caller says when they are actually done. A closing answer is
+# always brief; anything longer is a fresh request wearing a polite hat.
+DONE_WORDS = frozenset(
+    {
+        "no", "nope", "nah", "nahi", "nothing", "none", "bas",
+        "bye", "goodbye", "tata", "thanks", "thank", "cheers", "done",
+    }
+)
+
+DONE_PHRASES = (
+    "that's all", "thats all", "that is all", "nothing else", "no thanks",
+    "all good", "all set", "i'm good", "im good", "we're good", "were good",
+    "that's it", "thats it", "we are good",
+)
+
+# Above this, it is a sentence with content in it, not a sign-off. "You can set
+# it up today at two PM South African time" is eleven words and must never read
+# as permission to hang up.
+MAX_CLOSING_ANSWER_WORDS = 8
+
+
+def caller_sounds_finished(text: str) -> bool:
+    """True when the caller's last turn reads as "no, nothing else".
+
+    This is the gate on hanging up. It is deliberately strict: refusing to end a
+    finished call costs one extra question, while ending an unfinished one cuts
+    the caller off mid-sentence, which is what kept happening.
+    """
+    lowered = (text or "").lower()
+    if any(phrase in lowered for phrase in DONE_PHRASES):
+        return True
+    words = re.findall(r"[a-z']+", lowered)
+    if not words or len(words) > MAX_CLOSING_ANSWER_WORDS:
+        return False
+    return any(word in DONE_WORDS for word in words)
+
+
+def last_caller_turn(session: object) -> str:
+    """The most recent thing the caller said, or "" if they have not spoken."""
     try:
-        history = event.ctx.session.history  # type: ignore[attr-defined]
-        tail = []
-        for item in list(history.items)[-6:]:
-            role = getattr(item, "role", "?")
-            text = (getattr(item, "text_content", "") or "").strip()
-            if text:
-                tail.append(f"{role}: {text}")
-        logger.info("end_call requested by the model | recent turns: %s", " | ".join(tail))
+        for item in reversed(list(session.history.items)):  # type: ignore[attr-defined]
+            if getattr(item, "role", None) == "user":
+                return (getattr(item, "text_content", "") or "").strip()
     except Exception:
-        logger.warning("end_call requested by the model (could not read history)", exc_info=True)
+        logger.debug("could not read conversation history", exc_info=True)
+    return ""
 
 
 class ReceptionistAgent(Agent):
@@ -130,6 +197,9 @@ class ReceptionistAgent(Agent):
         self.profile = profile or load_profile()
         self.settings = settings or Settings.load()
         self.outbound = outbound
+        self._goodbye_instructions = (
+            OUTBOUND_GOODBYE if outbound else INBOUND_GOODBYE
+        )
 
         super().__init__(
             instructions=render_prompt(
@@ -138,33 +208,27 @@ class ReceptionistAgent(Agent):
                     self.profile, self.settings, outbound=outbound
                 ),
             ),
-            tools=[
-                EndCallTool(
-                    # Conditions live here as well as in the prompt because this
-                    # text is in the tool schema, right where the model makes
-                    # the decision. Prompt rules many turns back lose to it.
-                    extra_description=END_CALL_CONDITIONS,
-                    # The model says this closing line first; the session shuts
-                    # down only once that speech has finished playing.
-                    end_instructions=(
-                        "Say a short, warm goodbye. One sentence. Do not ask "
-                        "another question."
-                    ),
-                    # Deliberately False. The library would register its own
-                    # shutdown callback to delete the room, and shutdown
-                    # callbacks all run together under asyncio.gather - so it
-                    # raced ours, tore the room down while the goodbye audio was
-                    # still in flight, and left DisconnectWhatsAppCall with no
-                    # participant to disconnect (404). main.py now drains, hangs
-                    # up the WhatsApp leg, and deletes the room, in that order.
-                    delete_room=False,
-                    # Without this the model could end the call during its own
-                    # greeting, before the caller has said anything.
-                    ignore_on_enter=True,
-                    on_tool_called=_log_end_call,
-                ),
-            ],
         )
+
+    async def on_user_turn_completed(
+        self, turn_ctx: ChatContext, new_message: ChatMessage
+    ) -> None:
+        """Drop turns that contain no speech, instead of replying to them.
+
+        Without this the agent answers its own silence. A real call showed the
+        cost: the VAD fired, Deepgram returned nothing usable, and the agent
+        generated a reply anyway. Because the caller still had not said
+        anything, it did it again, and again, stacking four questions and a
+        stray "No further response." into one breath before the caller could
+        get a word in.
+
+        Raising StopResponse discards the turn cleanly; the library documents
+        this as the supported way to skip a generation.
+        """
+        text = new_message.text_content or ""
+        if is_noise_turn(text):
+            logger.info("ignoring a user turn with no speech in it: %r", text)
+            raise StopResponse()
 
     @function_tool
     async def get_business_hours(self, context: RunContext) -> str:
@@ -225,9 +289,17 @@ class ReceptionistAgent(Agent):
             caller_number=caller,
             room=room_name,
         )
+        # Confirm in the caller's words, not ours. The CSV needs India time so a
+        # human can act on it; the caller needs to hear the time they actually
+        # gave. A caller who said "two PM South African time" and hears "five
+        # thirty" back has no idea whether they were understood.
+        their_words = (raw_request or "").strip()
+        spoken = their_words if their_words else f"{preferred_date} at {preferred_time}"
         return (
-            f"Booked. Confirm back to {name} that the team will call on "
-            f"{preferred_date} at {preferred_time} India time."
+            f"Saved. Now say it back to {name} out loud using THEIR OWN words: "
+            f"\"{spoken}\". Do not convert it, do not say India time, and do not "
+            f"name a weekday if they said today or tomorrow. Then stop and wait "
+            f"for them to reply. Do not end the call in this reply."
         )
 
     @function_tool
@@ -274,6 +346,51 @@ class ReceptionistAgent(Agent):
             room=room_name,
         )
         return f"Noted. Someone will get back to {name} shortly."
+
+
+    @function_tool
+    async def end_call(self, context: RunContext) -> str:
+        """Hang up. Only after the caller has said they need nothing else.
+
+        Before calling this you MUST have asked whether there is anything else
+        you can help with, AND heard them answer. Asking the question and
+        calling this in the same reply is wrong: the caller never gets to
+        answer.
+
+        Do not call this straight after saving a booking. Confirm the day and
+        time out loud first and let them respond.
+        """
+        spoken = last_caller_turn(context.session)
+
+        if not caller_sounds_finished(spoken):
+            logger.info("refusing to end the call, caller last said: %r", spoken)
+            return (
+                "Not yet. They have not said they are finished. Do NOT call "
+                "end_call again in this reply. Answer what they just said, or "
+                "ask once whether there is anything else you can help with, "
+                "then stop talking and wait for their answer."
+            )
+
+        logger.info("ending the call, caller last said: %r", spoken)
+
+        # Mirrors what EndCallTool does, minus the room deletion: shut the
+        # session down once this turn's speech (which includes the goodbye,
+        # because a non-realtime LLM reuses the same speech handle for the tool
+        # reply) has actually finished playing. main.py's shutdown callback then
+        # drains, hangs up the WhatsApp leg and deletes the room, in that order.
+        def _shutdown_session(_: object) -> None:
+            context.session.shutdown()
+
+        context.speech_handle.add_done_callback(_shutdown_session)
+
+        def _shutdown_job(event: object) -> None:
+            job = get_job_context(required=False)
+            if job is not None:
+                job.shutdown(reason=getattr(getattr(event, "reason", None), "value", "user_initiated"))
+
+        context.session.once("close", _shutdown_job)
+
+        return self._goodbye_instructions
 
 
 def _call_identity() -> tuple[str, str]:

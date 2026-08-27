@@ -229,6 +229,8 @@ class Settings:
     language: LanguageProfile
     whatsapp: WhatsAppSettings
     log_metrics: bool
+    log_transcript: bool
+    log_interim_transcript: bool
 
     def preflight(self) -> None:
         """Resolve every credential the selected providers need.
@@ -322,6 +324,15 @@ class Settings:
             ),
             language=LanguageProfile(name=profile_name),
             log_metrics=_env("LOG_METRICS", "true").lower() in {"1", "true", "yes"},
+            # The conversation itself. On by default: a call you cannot read is
+            # a call you cannot debug, and on LiveKit Cloud the transcript file
+            # is written to an ephemeral disk you never see.
+            log_transcript=_env("LOG_TRANSCRIPT", "true").lower()
+            in {"1", "true", "yes"},
+            # Partial transcripts too. Off by default - Deepgram revises a
+            # partial several times a second.
+            log_interim_transcript=_env("LOG_INTERIM_TRANSCRIPT", "false").lower()
+            in {"1", "true", "yes"},
         )
 
 
