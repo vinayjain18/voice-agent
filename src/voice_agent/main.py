@@ -34,7 +34,7 @@ from voice_agent.observability import (
 )
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
-from voice_agent.storage import save_transcript
+from voice_agent.storage import build_store, save_transcript
 from voice_agent.whatsapp.disconnect import (
     disconnect_whatsapp_call,
     find_whatsapp_call_id,
@@ -94,26 +94,28 @@ def setup(proc: JobProcess) -> None:
 server.setup_fnc = setup
 
 
-def _is_outbound(ctx: JobContext) -> bool:
-    """Outbound calls carry direction in the dispatch metadata (see make_call.py).
+def _job_metadata(ctx: JobContext) -> dict:
+    """Dispatch metadata, or {} if there is none.
 
     Never raises: a malformed metadata string must not stop a call, it just
     means we greet as if the caller dialled in.
     """
     raw = getattr(ctx.job, "metadata", "") or ""
     if not isinstance(raw, str) or not raw:
-        return False
+        return {}
     try:
-        return json.loads(raw).get("direction") == "outbound"
-    except (ValueError, AttributeError):
+        parsed = json.loads(raw)
+    except ValueError:
         logger.warning("could not parse job metadata: %r", raw)
-        return False
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     settings = Settings.load()
-    outbound = _is_outbound(ctx)
+    metadata = _job_metadata(ctx)
+    outbound = metadata.get("direction") == "outbound"
 
     # Reuse the VAD loaded in setup() so the model load stays off the critical
     # path of this call.
@@ -127,7 +129,24 @@ async def entrypoint(ctx: JobContext) -> None:
 
     started_at = time.monotonic()
 
-    agent = ReceptionistAgent(settings=settings, outbound=outbound)
+    store = build_store(settings)
+    reminder_for = None
+    if metadata.get("purpose") == "reminder" and store is not None:
+        reminder_for = await _reminder_appointment(store, metadata.get("booking_ref", ""))
+
+    agent = ReceptionistAgent(
+        settings=settings, outbound=outbound, store=store, reminder_for=reminder_for
+    )
+
+    # Warm the diary while the caller is still hearing the greeting, so the
+    # first check_availability is a lookup rather than a network round trip.
+    # Cancelled in _on_shutdown rather than by its own shutdown callback:
+    # callbacks run concurrently under gather, and teardown order is the one
+    # thing we control (see the note in _on_shutdown).
+    prefetch = (
+        asyncio.create_task(_warm(agent.cache)) if agent.cache is not None else None
+    )
+
     await session.start(agent, room=ctx.room)
     await ctx.connect()
 
@@ -137,6 +156,9 @@ async def entrypoint(ctx: JobContext) -> None:
         Runs when the caller hangs up, when the agent ends the call itself, when
         the LiveKit console ends the session, and on Ctrl+C in terminal mode.
         """
+        if prefetch is not None and not prefetch.done():
+            prefetch.cancel()
+
         # Deleting the LiveKit room does not end the WhatsApp call: without an
         # explicit disconnect the caller hears silence until LiveKit's 30 second
         # cleanup. Read the id while the participant is still there; the actual
@@ -201,5 +223,39 @@ async def entrypoint(ctx: JobContext) -> None:
     #
     # add_to_chat_ctx defaults to True, so the model sees the greeting as its
     # own first turn and does not repeat it.
-    logger.info("call direction: %s", "outbound" if outbound else "inbound")
-    await session.say(opening_line(agent.profile, outbound=outbound))
+    logger.info(
+        "call direction: %s",
+        "reminder" if reminder_for else ("outbound" if outbound else "inbound"),
+    )
+    await session.say(
+        opening_line(
+            agent.profile, outbound=outbound, reminder=reminder_for is not None
+        )
+    )
+
+
+async def _reminder_appointment(store, booking_ref: str):
+    """The appointment this reminder call is about, or None if it has gone.
+
+    A patient who cancelled between the scan and the call being answered should
+    not be reminded about an appointment that no longer exists.
+    """
+    if not booking_ref:
+        return None
+    try:
+        found = await store.find_by_ref(booking_ref)
+    except Exception:
+        logger.exception("could not load appointment %s for a reminder call", booking_ref)
+        return None
+    if found is None or not found.is_active:
+        logger.info("reminder call for %s but it is no longer booked", booking_ref)
+        return None
+    return found
+
+
+async def _warm(cache) -> None:
+    try:
+        await cache.items(force=True)
+    except Exception:
+        # A cold cache is not fatal: the tool re-reads and reports its own error.
+        logger.warning("could not prefetch the appointment diary", exc_info=True)

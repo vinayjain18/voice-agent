@@ -25,6 +25,7 @@ from livekit.protocol.rtc import SessionDescription
 
 from livekit import api
 from voice_agent.config import Settings
+from voice_agent.reminders import run_once
 from voice_agent.whatsapp.disconnect import CALL_ID_ATTRIBUTE
 from voice_agent.whatsapp.payload import WhatsAppCallEvent, parse_call_events
 
@@ -190,3 +191,37 @@ def _signature_ok(app_secret: str | None, raw: bytes, header: str | None) -> boo
         return False
     expected = hmac.new(app_secret.encode(), raw, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header.removeprefix("sha256="))
+
+
+def _reminder_secret_ok(expected: str, request: Request) -> bool:
+    """Guard the trigger endpoint. It sits on a public URL."""
+    supplied = request.headers.get("x-reminder-secret", "")
+    if not supplied:
+        authorization = request.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+    return bool(supplied) and hmac.compare_digest(expected, supplied)
+
+
+@app.post("/tasks/reminders")
+async def reminders(request: Request) -> Response:
+    """Run one reminder pass. Called on a timer, see deploy/appsscript/.
+
+    Safe to call more often than needed and safe to call twice at once: a row is
+    claimed before it is dialled, so the second pass skips it.
+    """
+    expected = _settings().reminders.trigger_secret or ""
+    if not expected:
+        logger.error("REMINDER_TRIGGER_SECRET is not set, refusing to run unguarded")
+        return Response(status_code=503, content="reminder trigger is not configured")
+
+    if not _reminder_secret_ok(expected, request):
+        logger.warning("rejected a reminder trigger with a bad secret")
+        return Response(status_code=403, content="bad secret")
+
+    result = await run_once()
+    return Response(
+        status_code=200 if not result.error else 500,
+        content=json.dumps(result.as_dict()),
+        media_type="application/json",
+    )

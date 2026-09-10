@@ -14,7 +14,7 @@ from voice_agent.agents.receptionist import (
 )
 from voice_agent.business import load_profile
 from voice_agent.config import Settings
-from voice_agent.main import _is_outbound
+from voice_agent.main import _job_metadata
 
 
 class _Ctx:
@@ -30,6 +30,10 @@ class _Ctx:
 def _keys(monkeypatch):
     for key in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "RUMIK_API_KEY"):
         monkeypatch.setenv(key, "test-key")
+
+
+def _is_outbound(ctx) -> bool:
+    return _job_metadata(ctx).get("direction") == "outbound"
 
 
 def test_outbound_detected_from_metadata():
@@ -89,7 +93,8 @@ def test_entrypoint_speaks_the_greeting_rather_than_generating_it():
     source = (
         Path(__file__).resolve().parents[1] / "src/voice_agent/main.py"
     ).read_text()
-    assert "session.say(opening_line(" in source
+    say = source.index("session.say(")
+    assert "opening_line(" in source[say : say + 200]
     assert "generate_reply" not in source
 
 

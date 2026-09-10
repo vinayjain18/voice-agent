@@ -1,69 +1,65 @@
 {
-  "_comment": "DEMO CONTENT. Answers are written to be spoken aloud: short, no lists, no markup.",
+  "_comment": "DEMO CONTENT. Answers are written to be spoken aloud: short, contracted, no lists, no markup. These are quoted almost verbatim on a call, so they are held to the same voice rules as the prompt.",
   "faqs": [
     {
-      "q": "What do you build?",
-      "a": "Six things really: AI agents and voice assistants, workflow automation, websites, mobile apps, custom software and full SaaS products. Most clients come to us for one and end up doing two."
+      "q": "What are your timings?",
+      "a": "Monday to Friday we're open ten to one in the morning, and five to eight in the evening. Saturday is ten to two. We're closed on Sunday."
     },
     {
-      "q": "What have you built before, and for whom?",
-      "a": "Our own product Karyalo is a contract management tool for legal teams. We also built Cloei, an AI sales assistant that handles car finance leads over SMS for a UK company called ChooseMyCar. And a mobile app for clinicians at a UK based health-tech startup."
+      "q": "How much is the consultation?",
+      "a": "It's six hundred rupees for a consultation. If you're coming back for a follow-up within fifteen days, that's three hundred."
     },
     {
-      "q": "Can you tell me more about the car finance one?",
-      "a": "That was Cloei for ChooseMyCar. Every new lead gets a text within seconds, day or night. She talks through finance options, handles objections, chases people who go quiet, and books callbacks so the sales team only speaks to warm customers."
+      "q": "Do you take insurance?",
+      "a": "We don't do cashless insurance here, but you'll get a proper receipt and prescription so you can claim it back yourself."
     },
     {
-      "q": "How much do you charge?",
-      "a": "It really depends on the scope, so I would not want to give you a number that turns out to be wrong. What we normally do is a short call to understand what you need, then send a written quotation with a fixed price and timeline. Shall I get that booked in for you?"
+      "q": "Can I just walk in?",
+      "a": "You can, though you might be waiting a while. If you'd like I can book you a time now and you'll be seen straight away."
     },
     {
-      "q": "Can you give me a rough idea of budget?",
-      "a": "I can tell you how it works rather than a figure. Everything is fixed price against a written scope, paid in milestones, usually forty percent to start. Once Vinay understands the scope on a call he can give you a real number, normally within a couple of days."
+      "q": "Which doctor will I see?",
+      "a": "You'll see Dr Meera Iyer. She's a general physician, MBBS and an MD in General Medicine, and she's been practising eighteen years."
     },
     {
-      "q": "How long does a project take?",
-      "a": "A marketing site is usually two to four weeks. An AI agent or an automation is around four to eight weeks. A full product is three months or more, but we ship it in stages so you have something working early."
+      "q": "Where exactly are you?",
+      "a": "We're on the second floor of Sunder Chambers, on Lokhandwala Road in Andheri West. There's a lift, and the entrance is just past the chemist."
     },
     {
-      "q": "How big is the team?",
-      "a": "Small and hand-picked. Designers, engineers and AI specialists, led by Vinay Jain, our Co-founder. That is deliberate. It is why we move in weeks rather than quarters."
+      "q": "What should I bring?",
+      "a": "Any earlier prescriptions and test reports, and a list of whatever you're already taking. That's usually all she needs."
     },
     {
-      "q": "Where are you based?",
-      "a": "Mumbai, India. We work with clients in India, the UK and the US, so we're used to working across time zones."
+      "q": "How long does an appointment take?",
+      "a": "Each slot is fifteen minutes. If it's a first visit or something complicated, do allow a bit longer."
     },
     {
-      "q": "How do you work? What is the process?",
-      "a": "Four steps. A short discovery call, then a written scope with a fixed price, then we build with weekly demos so you always see progress, then launch and handover with a support window."
+      "q": "Do you do blood tests?",
+      "a": "Yes, we do routine blood work at the clinic. Reports normally come back the next working day and the desk will message you."
     },
     {
-      "q": "What technology do you use?",
-      "a": "Mostly Python and FastAPI on the backend, Next.js and React on the front, React Native for mobile, and AWS for hosting. For AI work we pick the model that fits rather than tying ourselves to one provider."
+      "q": "Do you see children?",
+      "a": "Yes, Dr Iyer sees children as well as adults. For anything under a year old, do mention it when you book."
     },
     {
-      "q": "What happens after launch?",
-      "a": "Every launch comes with thirty days of support for any fixes. After that most clients keep us on a small monthly retainer for maintenance and improvements, but there is no obligation."
+      "q": "Can I get a repeat prescription without coming in?",
+      "a": "That's Dr Iyer's call rather than mine, so the safest thing is to book a short follow-up and she can sort it out then."
     },
     {
-      "q": "Do you sign an NDA? Who owns the code?",
-      "a": "Yes, we sign NDAs as a matter of course. And you own all the code and the intellectual property once the final payment is made. It is your product, not ours."
+      "q": "Can I cancel or change my appointment?",
+      "a": "Of course. I can find it from the number you're calling on, or you can give me the four digit booking number."
     },
     {
-      "q": "Do you work with startups or only big companies?",
-      "a": "Mostly founders and small teams, honestly. That is who benefits most from moving quickly."
+      "q": "Will you remind me?",
+      "a": "Yes, we'll give you a ring about half an hour before, just so it doesn't slip your mind."
     },
     {
-      "q": "How do we get started?",
-      "a": "The easiest way is a quick call with Vinay. I can set that up for you right now. What day works best for you?"
+      "q": "Do you do home visits?",
+      "a": "Not at the moment, I'm afraid. Everything's at the clinic."
     },
     {
-      "q": "Can you take over a project someone else started?",
-      "a": "Often yes. We would want to look at the existing code first and be honest with you about whether continuing or rebuilding is the better use of your money."
-    },
-    {
-      "q": "Do you do only AI, or normal development too?",
-      "a": "Both, equally. AI is what people ask about most right now, but a good chunk of our work is straightforward web, mobile and custom software."
+      "q": "Do you have parking?",
+      "a": "There's paid parking in the building basement, and usually space on the road outside except at peak hours."
     }
   ]
 }

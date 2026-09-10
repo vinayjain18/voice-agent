@@ -1,40 +1,54 @@
 {
-  "_comment": "DEMO CONTENT. Grounded in real WebsiNova work (Karyalo, Cloei/ChooseMyCar) but written for a portfolio demo. Review every line before this is ever used with a real prospect.",
-  "business_name": "WebsiNova Technologies",
-  "agent_name": "Emma",
-  "_greeting_comment": "Spoken verbatim by session.say() the moment the call connects, so it is identical every time and costs no LLM round trip. Keep it to one breath.",
-  "greeting_inbound": "Thank you for calling WebsiNova Technologies. My name is Emma. How may I help you today?",
-  "greeting_outbound": "Hello, this is Emma calling from WebsiNova Technologies. Is now a good moment to talk?",
-  "industry": "software development studio",
-  "location": "Mumbai, India",
-  "hours": "Monday to Friday, 9am to 7pm India time",
-  "founded": "We've been building products together since 2021.",
-  "team": "A small hand-picked team of designers, engineers and AI specialists, led by Vinay Jain, Co-founder.",
+  "_comment": "DEMO CONTENT for a portfolio project. The clinic, the doctor and the patients are invented. Review and replace every line before this is used with real patients. Spoken fields use contractions on purpose: long forms are the clearest sign of a machine on a phone call.",
+  "_schedule_note": "`schedule` is the single source of truth for both the slot grid and the spoken opening hours. Change it here and the agent's answers and its bookings move together.",
+
+  "business_name": "Aarogya Family Clinic",
+  "agent_name": "Nova",
+  "industry": "family medicine clinic",
+  "location": "Andheri West, Mumbai",
+  "address": "Second floor, Sunder Chambers, Lokhandwala Road, Andheri West, Mumbai 400053",
+
+  "doctor_name": "Dr Meera Iyer",
+  "doctor_credentials": "MBBS, MD in General Medicine, with eighteen years in practice",
+  "speciality": "general physician",
+
+  "schedule": {
+    "timezone": "Asia/Kolkata",
+    "slot_minutes": 15,
+    "booking_horizon_days": 30,
+    "weekly": {
+      "monday": [["10:00", "13:00"], ["17:00", "20:00"]],
+      "tuesday": [["10:00", "13:00"], ["17:00", "20:00"]],
+      "wednesday": [["10:00", "13:00"], ["17:00", "20:00"]],
+      "thursday": [["10:00", "13:00"], ["17:00", "20:00"]],
+      "friday": [["10:00", "13:00"], ["17:00", "20:00"]],
+      "saturday": [["10:00", "14:00"]],
+      "sunday": []
+    }
+  },
+
   "services": [
-    "AI agents and voice assistants",
-    "Workflow automation",
-    "Web development",
-    "Mobile apps",
-    "Custom software",
-    "SaaS products"
+    "General consultation for fever, infections, aches and everyday illness",
+    "Follow-up visits and review of ongoing treatment",
+    "Blood pressure, diabetes and thyroid monitoring",
+    "Health check-ups and routine blood tests",
+    "Vaccinations for adults and children",
+    "Dressings, injections and minor procedures"
   ],
-  "value_proposition": "Speed. Most studios quote in quarters; we ship in weeks, because the team is small and senior enough not to need layers of handover.",
-  "tech_stack": "Python, FastAPI, Next.js, React, React Native, TypeScript, Node, Postgres, MongoDB, and AWS. For AI work we use the major model providers rather than betting on one.",
-  "process": "Four steps. A short discovery call, then a written scope with a fixed price and timeline, then build in weekly demos so you see progress, then launch with a handover and a support window.",
-  "engagement_model": "Most projects are fixed scope and fixed price, paid in milestones, typically forty percent to start and the rest on agreed checkpoints. Longer programmes can run as a monthly retainer.",
-  "pricing_policy": "Pricing depends entirely on scope, so we don't quote on a first call. After a short discovery conversation we send a written quotation with a fixed price and timeline. Most engagements start with a paid discovery if the scope is unclear.",
-  "timelines": "A marketing site is usually two to four weeks. A working AI agent or automation is typically four to eight weeks. A full product build runs three months or more, shipped in stages so you have something usable early.",
-  "support": "Every launch includes a thirty day support window for fixes. After that most clients move to a small monthly retainer for maintenance, monitoring and improvements.",
-  "confidentiality": "We sign NDAs as a matter of course, and the client owns all the code and IP on final payment.",
-  "clients_summary": "We work with founders and small teams in India, the UK and the US, across legal tech, car finance, healthcare and direct to consumer retail.",
-  "case_studies": [
-    "Karyalo, our own contract management product for law firms and in-house legal teams. It handles drafting, clause review against a firm's own playbook, and signature, all in one record. It is live at karyalo.in.",
-    "Cloei, an AI SMS sales assistant we built for ChooseMyCar, a UK car finance company. It texts every new lead within seconds, holds a real conversation about finance, handles objections and books warm callbacks. Built on Python, FastAPI, MongoDB, AWS Bedrock and Twilio.",
-    "A cross-platform mobile app for a UK based health-tech startup, for clinicians visiting patients at home. Offline-first, so it keeps working when the signal drops and syncs when it returns. In both app stores nine weeks after kickoff.",
-    "An operations automation programme for a direct to consumer retail brand, replacing manual order and inventory handling."
-  ],
-  "booking_link": "https://cal.com/vinay-jain",
-  "contact_email": "hello@websinova.com",
-  "escalation_contact": "Vinay Jain, Co-founder",
-  "languages": "English and Hindi, including natural Hinglish code-switching"
+
+  "consultation_fee": "The consultation is six hundred rupees. A follow-up within fifteen days is three hundred.",
+  "payment_methods": "We take cash, UPI and all the usual cards at the desk.",
+  "insurance": "We don't do cashless insurance at the clinic. We'll give you a proper receipt and prescription so you can claim it back yourself.",
+
+  "visit_advice": "It helps if you bring any earlier prescriptions, test reports and a list of anything you're already taking.",
+  "walk_in_policy": "We do keep a little room for walk-ins, but you might wait a while. An appointment is much quicker.",
+  "reports_policy": "Test reports usually come back the next working day, and the desk will message you when they're ready.",
+
+  "emergency_number": "108",
+  "escalation_contact": "the clinic desk",
+  "contact_email": "desk@aarogyaclinic.example",
+
+  "greeting_inbound": "Thanks for calling Aarogya Family Clinic. This is Nova. How can I help you?",
+  "greeting_outbound": "Hello, this is Nova calling from Aarogya Family Clinic. Is now an alright time?",
+  "greeting_reminder": "Hello, this is Nova from Aarogya Family Clinic, just calling about your appointment. Is now an alright time?"
 }

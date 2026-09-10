@@ -1,3 +1,5 @@
 fastapi>=0.115
+google-auth>=2.38
+aiohttp>=3.9
 livekit-api>=1.2.0
 python-dotenv>=1.0

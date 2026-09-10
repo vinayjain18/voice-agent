@@ -54,16 +54,16 @@ def test_prompt_renders_with_every_placeholder_filled(monkeypatch):
     assert profile["business_name"] in rendered
 
 
-def test_prompt_no_longer_pushes_the_booking_link(monkeypatch):
-    """The agent takes the booking itself instead of reading out a URL."""
+def test_prompt_reads_out_no_urls(monkeypatch):
+    """The agent books on the call rather than sending anyone to a website."""
     monkeypatch.setenv("DEEPGRAM_API_KEY", "x")
     monkeypatch.setenv("GROQ_API_KEY", "x")
-    profile = load_profile()
     rendered = render_prompt(
-        "receptionist", build_prompt_variables(profile, Settings.load())
+        "receptionist", build_prompt_variables(load_profile(), Settings.load())
     )
-    assert profile["booking_link"] not in rendered
-    assert "book_callback" in rendered
+    assert "http://" not in rendered
+    assert "https://" not in rendered
+    assert "book_appointment" in rendered
 
 
 def test_prompt_raises_on_missing_variable():

@@ -124,18 +124,18 @@ def test_tool_calls_log_arguments_and_result(session_and_log):
             function_calls=[
                 FunctionCall(
                     call_id="1",
-                    name="book_callback",
+                    name="book_appointment",
                     arguments=json.dumps({"name": "Rajesh", "preferred_time": "14:00"}),
                 )
             ],
             function_call_outputs=[
                 FunctionCallOutput(
-                    call_id="1", name="book_callback", output="Booked.", is_error=False
+                    call_id="1", name="book_appointment", output="Booked.", is_error=False
                 )
             ],
         ),
     )
-    assert "-- tool | book_callback(" in caplog.text
+    assert "-- tool | book_appointment(" in caplog.text
     assert "name='Rajesh'" in caplog.text
     assert "preferred_time='14:00'" in caplog.text
     assert "-> Booked." in caplog.text
@@ -160,12 +160,12 @@ def test_malformed_tool_arguments_do_not_raise(session_and_log):
         "function_tools_executed",
         FunctionToolsExecutedEvent(
             function_calls=[
-                FunctionCall(call_id="3", name="book_callback", arguments="not json")
+                FunctionCall(call_id="3", name="book_appointment", arguments="not json")
             ],
             function_call_outputs=[None],
         ),
     )
-    assert "book_callback(not json)" in caplog.text
+    assert "book_appointment(not json)" in caplog.text
 
 
 def test_speech_with_no_transcript_is_warned_about(session_and_log):

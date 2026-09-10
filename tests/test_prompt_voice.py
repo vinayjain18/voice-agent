@@ -36,6 +36,12 @@ def rendered() -> str:
     )
 
 
+@pytest.fixture
+def flat(rendered) -> str:
+    """The prompt with line wrapping collapsed, for phrase assertions."""
+    return " ".join(rendered.split())
+
+
 def _agent_lines(text: str) -> list[str]:
     """Every spoken example reply, including its wrapped continuation lines."""
     lines = text.splitlines()
@@ -126,20 +132,27 @@ def test_prompt_teaches_leading_the_conversation(rendered):
     assert "Never ask two questions in one breath" in rendered
 
 
-def test_prompt_covers_the_non_prospect_calls(rendered):
-    """A business line gets more than prospects."""
+def test_prompt_covers_the_calls_a_clinic_line_gets(flat):
+    """A clinic line gets more than patients booking in."""
     for topic in (
         "Someone selling to us",
-        "asking for a job",
-        "existing client",
+        "Someone asking for a job",
+        "Asking for test results over the phone",
+        "Asking for the doctor by name",
         "Someone in a hurry",
     ):
-        assert topic in rendered, topic
+        assert topic in flat, topic
 
 
-def test_existing_client_flow_refuses_to_guess_at_status(rendered):
-    assert "no visibility into live projects" in rendered
-    assert "Do not guess at the status" in rendered
+def test_results_and_prescriptions_never_get_handled_at_the_desk(flat):
+    """Both are the doctor's call, and both are easy for a model to guess at."""
+    assert "no visibility into results" in flat
+    assert "don't say whether a result is normal" in flat
+    assert "That's the doctor's decision, never yours" in flat
+
+
+def test_the_doctors_whereabouts_are_never_disclosed(flat):
+    assert "Don't say whether she's in, busy, or with a patient" in flat
 
 
 def test_prompt_handles_the_awkward_times(rendered):
@@ -157,7 +170,7 @@ def test_prompt_handles_the_awkward_times(rendered):
 def test_prompt_asks_for_the_day_with_options_not_an_empty_field(rendered):
     assert "Getting the day" in rendered
     assert "later this week" in rendered
-    assert "Morning or afternoon?" in rendered
+    assert "Morning or evening?" in rendered
 
 
 def test_prompt_varies_the_closing_question(rendered):
@@ -217,7 +230,7 @@ def test_the_end_call_tool_documents_waiting_for_the_answer():
     description = " ".join(end_call.info.description.split())
     assert "heard them answer" in description
     assert "same reply is wrong" in description
-    assert "Do not call this straight after saving a booking" in description
+    assert "Do not call this straight after saving or cancelling" in description
 
 
 def test_prompt_requires_the_callers_own_wording_for_the_time(rendered):
@@ -262,17 +275,17 @@ def test_spoken_content_is_not_written_stiffly(filename):
     assert not stiff, f"{filename}: {stiff}"
 
 
-def test_prompt_forbids_stacking_questions(rendered):
-    """A real call produced four questions in one breath."""
-    assert "One reply is one thought" in rendered
-    assert "If they have not said anything, say nothing" in rendered
+def test_prompt_forbids_stacking_questions(flat):
+    """A real call produced several questions in one breath."""
+    assert "One reply is one thought" in flat
+    assert "If they have not said anything, say nothing" in flat
     # The actual failure is kept as a counter-example so it stays recognisable.
-    assert "this is four questions in one breath" in rendered
-    assert "No further response." in rendered
+    assert "three questions in one breath" in flat
+    assert "No further response." in flat
 
 
-def test_prompt_limits_name_repetition(rendered):
-    assert "Never in two replies in a row" in rendered
+def test_prompt_limits_name_repetition(flat):
+    assert "name in two replies in a row" in flat
 
 
 def test_prompt_requires_confirming_the_booking_before_closing(rendered):

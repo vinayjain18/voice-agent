@@ -1,16 +1,26 @@
-"""Booking flow: date injection, mandatory time, and caller-number reuse."""
+"""Appointment tools, the closing flow, and the prompt rules that guard both."""
 
 from __future__ import annotations
 
-import csv
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from voice_agent.agents.receptionist import ReceptionistAgent, build_prompt_variables
+from tests.fake_sheets import FakeSheetsClient
+from voice_agent.agents.receptionist import (
+    BUSINESS_TZ,
+    ReceptionistAgent,
+    build_prompt_variables,
+)
 from voice_agent.business import load_profile
 from voice_agent.config import Settings
+from voice_agent.prompts import render_prompt
+from voice_agent.storage.appointments import COLUMNS, AppointmentStore
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @pytest.fixture(autouse=True)
@@ -20,184 +30,334 @@ def _keys(monkeypatch):
 
 
 @pytest.fixture
-def agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    return ReceptionistAgent(settings=Settings.load())
+def sheet() -> FakeSheetsClient:
+    return FakeSheetsClient([list(COLUMNS)])
 
 
-def _rows(tmp_path):
-    return list(csv.DictReader((tmp_path / "leads.csv").open()))
-
-
-def test_prompt_carries_todays_date():
-    """Without this the model invents a date for 'next Tuesday'."""
-    variables = build_prompt_variables(load_profile(), Settings.load())
-    assert variables["current_date"].count("-") == 2
-    assert variables["current_datetime"]
-
-
-def test_prompt_forbids_asking_for_contact_details():
-    """It nagged a real caller for a number it did not need."""
-    from voice_agent.prompts import render_prompt
-
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
+@pytest.fixture
+def agent(sheet) -> ReceptionistAgent:
+    return ReceptionistAgent(
+        settings=Settings.load(), store=AppointmentStore(sheet, tab="appointments")
     )
+
+
+@pytest.fixture
+def rendered() -> str:
+    """The prompt with its line wrapping collapsed.
+
+    Assertions are about the words, not where the paragraph happened to break.
+    """
+    return " ".join(
+        render_prompt(
+            "receptionist", build_prompt_variables(load_profile(), Settings.load())
+        ).split()
+    )
+
+
+def next_open_slot(days_ahead: int = 1) -> datetime:
+    """A real free slot on the clinic's grid, a day or more from now."""
+    schedule = load_profile().schedule
+    day = datetime.now(IST).date() + timedelta(days=days_ahead)
+    for _ in range(10):
+        slots = schedule.slots_for(day)
+        if slots:
+            return slots[0]
+        day += timedelta(days=1)
+    raise AssertionError("the demo schedule has no open days")
+
+
+def rows(sheet: FakeSheetsClient) -> list[dict]:
+    return [dict(zip(COLUMNS, row, strict=False)) for row in sheet.rows[1:]]
+
+
+IDENTITY = "voice_agent.agents.receptionist._call_identity"
+
+
+def test_prompt_carries_todays_date(rendered):
+    """Without it the model invents a year when a caller says "next Tuesday"."""
+    today = datetime.now(BUSINESS_TZ).strftime("%Y-%m-%d")
+    assert today in rendered
+
+
+def test_prompt_forbids_asking_for_contact_details(rendered):
     assert "Never ask for a phone number" in rendered
-    assert "email address" in rendered
+    assert "already have their number" in rendered
 
 
-def test_prompt_forbids_repeating_questions():
-    """It re-asked the same question repeatedly into silence."""
-    from voice_agent.prompts import render_prompt
-
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
-    )
-    assert "Never repeat a question" in rendered
-    assert "Never send several messages in a row" in rendered
+def test_prompt_forbids_repeating_questions(rendered):
+    assert "One reply is one thought" in rendered
+    assert "If they have not said anything, say nothing" in rendered
 
 
-def test_booking_tool_has_no_contact_argument():
-    """The model cannot ask for what it cannot pass."""
+def test_no_appointment_tool_accepts_a_contact_argument():
+    """The model cannot ask for what it has nowhere to put."""
     import inspect
 
-    from voice_agent.agents.receptionist import ReceptionistAgent
-
-    params = inspect.signature(ReceptionistAgent.book_callback).parameters
-    assert "phone_or_email" not in params
-    assert "email" not in " ".join(params)
-
-
-async def test_booking_records_caller_number_silently(agent, tmp_path):
-    """The number is captured from the call, never requested."""
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", "+919876543210"),
+    for name in (
+        "book_appointment",
+        "cancel_appointment",
+        "reschedule_appointment",
+        "find_my_appointment",
     ):
-        result = await agent.book_callback(
-            None, name="Raj", preferred_date="2026-08-25",
-            preferred_time="15:00", reason="voice agent",
-            raw_request="next Tuesday at 3",
-        )
-    assert "Saved" in result
-    row = _rows(tmp_path)[0]
-    assert row["kind"] == "booking"
-    assert row["contact"] == "+919876543210"
-    assert row["caller_number"] == "+919876543210"
-    assert row["preferred_date"] == "2026-08-25"
-    assert row["preferred_time"] == "15:00"
+        params = " ".join(inspect.signature(getattr(ReceptionistAgent, name)).parameters)
+        assert "phone" not in params, name
+        assert "email" not in params, name
+        assert "number" not in params, name
 
 
-async def test_booking_refuses_without_a_time(agent, tmp_path):
-    """The real bug: a lead was saved with no time because none was asked for."""
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", "+919876543210"),
-    ):
-        result = await agent.book_callback(
-            None, name="Raj", preferred_date="2026-08-25", preferred_time="",
-            reason="x",
-        )
-    assert "no time was given" in result
-    assert not (tmp_path / "leads.csv").exists()
-
-
-async def test_booking_refuses_without_name(agent, tmp_path):
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", "+919876543210"),
-    ):
-        result = await agent.book_callback(
-            None, name="", preferred_date="2026-08-25", preferred_time="15:00",
-            reason="x",
-        )
-    assert "Do not save yet" in result
-    assert not (tmp_path / "leads.csv").exists()
-
-
-async def test_message_requires_a_reason_no_time_was_given(agent, tmp_path):
-    """Forces the model to have actually asked for a time."""
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", "+919876543210"),
-    ):
-        result = await agent.take_callback_details(
-            None, name="Raj", reason="x", why_no_time="",
-        )
-    assert "what day and time" in result
-    assert not (tmp_path / "leads.csv").exists()
-
-
-async def test_booking_works_without_a_caller_number(agent, tmp_path):
-    """Console and browser sessions have no number. That must not block a booking."""
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("console-1", ""),
-    ):
-        result = await agent.book_callback(
-            None, name="Raj", preferred_date="2026-08-25",
-            preferred_time="15:00", reason="x",
-        )
-    assert "Saved" in result
-    assert _rows(tmp_path)[0]["contact"] == ""
-
-
-async def test_message_saved_with_justification(agent, tmp_path):
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", "+919876543210"),
-    ):
-        result = await agent.take_callback_details(
-            None, name="Raj", reason="pricing",
-            why_no_time="wants to check their calendar",
-        )
-    assert "Noted" in result
-    row = _rows(tmp_path)[0]
-    assert row["kind"] == "message"
-    assert row["raw_request"] == "wants to check their calendar"
-    assert row["contact"] == "+919876543210"
-
-
-# --- ending the call --------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_booking_is_confirmed_in_the_callers_own_words(agent):
-    """A caller who said "two PM South African time" must not hear "five thirty".
-
-    The CSV keeps India time so a human can act on it. The caller hears what
-    they actually said, otherwise they cannot tell they were understood.
-    """
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", "+919876543210"),
-    ):
-        result = await agent.book_callback(
+async def test_booking_records_the_caller_number_without_asking(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
             None,
-            name="Ravi",
-            preferred_date="2026-08-27",
-            preferred_time="17:30",
-            reason="CRM",
-            raw_request="today at two PM South African time",
+            name="Asha",
+            date=slot.strftime("%Y-%m-%d"),
+            time=slot.strftime("%H:%M"),
+            reason="fever",
+            raw_request="tomorrow evening",
         )
-    assert "today at two PM South African time" in result
-    assert "17:30" not in result
-    assert "India time" not in result.replace("do not say India time", "")
-    # And it must not close the call in the same breath.
-    assert "Do not end the call in this reply." in result
+
+    saved = rows(sheet)
+    assert len(saved) == 1
+    assert saved[0]["patient_name"] == "Asha"
+    assert saved[0]["patient_number"] == "+919876543210"
+    assert saved[0]["status"] == "booked"
+    assert "Saved" in result
 
 
-@pytest.mark.asyncio
-async def test_booking_falls_back_to_the_stored_time_if_nothing_was_quoted(agent):
-    with patch(
-        "voice_agent.agents.receptionist._call_identity",
-        return_value=("call-1", ""),
+async def test_booking_refuses_without_a_name(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None, name="  ", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        )
+
+    assert "Do not save yet" in result
+    assert rows(sheet) == []
+
+
+async def test_booking_refuses_without_a_time(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=""
+        )
+
+    assert "Do not save yet" in result
+    assert rows(sheet) == []
+
+
+async def test_booking_refuses_a_time_that_is_not_on_the_grid(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time="10:07"
+        )
+
+    assert "not one of our appointment times" in result
+    assert rows(sheet) == []
+
+
+async def test_booking_refuses_a_time_in_the_past(agent, sheet):
+    yesterday = datetime.now(IST) - timedelta(days=1)
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None, name="Asha", date=yesterday.strftime("%Y-%m-%d"), time="10:00"
+        )
+
+    assert "already passed" in result
+    assert rows(sheet) == []
+
+
+async def test_booking_is_confirmed_in_the_callers_own_words(agent):
+    """A caller who said "tomorrow evening" must not hear a converted date."""
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None,
+            name="Asha",
+            date=slot.strftime("%Y-%m-%d"),
+            time=slot.strftime("%H:%M"),
+            raw_request="tomorrow evening",
+        )
+
+    assert "tomorrow evening" in result
+    assert "THEIR OWN words" in result
+
+
+async def test_booking_reads_the_reference_back_as_digits(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        )
+
+    ref = rows(sheet)[0]["booking_ref"]
+    assert " ".join(ref) in result
+
+
+async def test_a_taken_slot_is_offered_elsewhere_rather_than_double_booked(agent, sheet):
+    slot = next_open_slot()
+    args = {"date": slot.strftime("%Y-%m-%d"), "time": slot.strftime("%H:%M")}
+
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(None, name="Asha", **args)
+    with patch(IDENTITY, return_value=("room-2", "+919000000000")):
+        result = await agent.book_appointment(None, name="Ravi", **args)
+
+    assert "just took that slot" in result
+    assert len(rows(sheet)) == 1
+
+
+async def test_a_storage_failure_never_claims_the_appointment_was_booked(agent):
+    slot = next_open_slot()
+    with (
+        patch(IDENTITY, return_value=("room-1", "+919876543210")),
+        patch.object(agent.store, "create", side_effect=RuntimeError("sheets is down")),
     ):
-        result = await agent.book_callback(
-            None, name="Raj", preferred_date="2026-08-25",
-            preferred_time="15:00", reason="x",
+        result = await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
         )
-    assert "2026-08-25 at 15:00" in result
+
+    assert "did NOT save" in result
+    assert "Do not tell them it is booked" in result
+
+
+async def test_availability_only_offers_real_slots(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        )
+        offered = await agent.check_availability(None, day=slot.strftime("%Y-%m-%d"))
+
+    from voice_agent.scheduling import speak_time
+
+    assert speak_time(slot) not in offered
+
+
+async def test_availability_says_so_when_the_clinic_is_closed(agent):
+    schedule = load_profile().schedule
+    day = datetime.now(IST).date()
+    for _ in range(8):
+        day += timedelta(days=1)
+        if not schedule.is_open_on(day):
+            break
+
+    result = await agent.check_availability(None, day=day.strftime("%Y-%m-%d"))
+    assert "closed" in result.lower()
+
+
+async def test_availability_refuses_a_date_beyond_the_booking_horizon(agent):
+    far = datetime.now(IST).date() + timedelta(days=400)
+    result = await agent.check_availability(None, day=far.strftime("%Y-%m-%d"))
+    assert "days ahead" in result
+
+
+async def test_find_my_appointment_uses_the_calling_number(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        )
+        found = await agent.find_my_appointment(None)
+
+    assert "One appointment" in found
+    assert rows(sheet)[0]["booking_ref"] in found
+
+
+async def test_find_my_appointment_asks_for_the_reference_when_nothing_matches(agent):
+    with patch(IDENTITY, return_value=("room-1", "+910000000000")):
+        found = await agent.find_my_appointment(None)
+
+    assert "Nothing is booked" in found
+    assert "four digit" in found
+
+
+async def test_cancel_marks_the_row_cancelled(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        )
+        result = await agent.cancel_appointment(None)
+
+    assert "Cancelled" in result
+    assert rows(sheet)[0]["status"] == "cancelled"
+
+
+async def test_cancel_with_an_unknown_reference_changes_nothing(agent, sheet):
+    slot = next_open_slot()
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        )
+        result = await agent.cancel_appointment(None, booking_ref="0000")
+
+    assert "No appointment has the number" in result
+    assert rows(sheet)[0]["status"] == "booked"
+
+
+async def test_reschedule_keeps_the_original_when_the_new_time_is_taken(agent, sheet):
+    first = next_open_slot(1)
+    second = next_open_slot(2)
+
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, name="Asha", date=first.strftime("%Y-%m-%d"), time=first.strftime("%H:%M")
+        )
+    with patch(IDENTITY, return_value=("room-2", "+919000000000")):
+        await agent.book_appointment(
+            None, name="Ravi", date=second.strftime("%Y-%m-%d"), time=second.strftime("%H:%M")
+        )
+
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.reschedule_appointment(
+            None, date=second.strftime("%Y-%m-%d"), time=second.strftime("%H:%M")
+        )
+
+    assert "just taken" in result
+    assert "still in place" in result
+    active = [row for row in rows(sheet) if row["status"] == "booked"]
+    assert len(active) == 2
+
+
+async def test_reschedule_moves_the_appointment(agent, sheet):
+    first = next_open_slot(1)
+    second = next_open_slot(3)
+
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, name="Asha", date=first.strftime("%Y-%m-%d"), time=first.strftime("%H:%M")
+        )
+        result = await agent.reschedule_appointment(
+            None,
+            date=second.strftime("%Y-%m-%d"),
+            time=second.strftime("%H:%M"),
+            raw_request="Thursday instead",
+        )
+
+    assert "Moved" in result
+    assert "Thursday instead" in result
+    active = [row for row in rows(sheet) if row["status"] == "booked"]
+    assert len(active) == 1
+    assert active[0]["slot_date"] == second.strftime("%Y-%m-%d")
+
+
+async def test_tools_refuse_to_pretend_when_the_store_is_missing():
+    agent = ReceptionistAgent(settings=Settings.load(), store=None)
+    slot = next_open_slot()
+
+    for result in (
+        await agent.check_availability(None),
+        await agent.book_appointment(
+            None, name="Asha", date=slot.strftime("%Y-%m-%d"), time=slot.strftime("%H:%M")
+        ),
+        await agent.find_my_appointment(None),
+        await agent.cancel_appointment(None),
+    ):
+        assert "not available" in result
+        assert "Do not pretend" in result
 
 
 def _run_context_with_last_user_turn(text):
@@ -229,7 +389,7 @@ def test_agent_has_an_end_call_tool():
         if name:
             names.add(name)
     assert "end_call" in names
-    assert "book_callback" in names
+    assert "book_appointment" in names
 
 
 @pytest.mark.asyncio
@@ -311,56 +471,56 @@ def test_prompt_carries_worked_examples():
     assert "How these calls should sound" in rendered
     # Both the good pattern and the failure modes seen on real calls.
     assert "What NOT to do" in rendered
-    assert "Morning or afternoon?" in rendered
+    assert "Morning or evening?" in rendered
 
 
-def test_prompt_forbids_ending_in_the_same_turn():
-    from voice_agent.prompts import render_prompt
-
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
-    )
+def test_prompt_forbids_ending_in_the_same_turn(rendered):
     assert "Never end the call in the same turn" in rendered
     assert "silence is not an answer" in rendered
 
 
-def test_prompt_refuses_health_advice():
-    """The one refusal that could actually hurt someone if it slipped."""
-    from voice_agent.prompts import render_prompt
-
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
-    )
-    assert "Health, medicine, symptoms, dosage" in rendered
-    assert "Never answer" in rendered
-    assert "pharmacist" in rendered
-    # Building an app for a health-tech client must not read as medical standing.
-    assert "that tells you nothing about" in rendered
+def test_prompt_refuses_to_give_medical_advice(rendered):
+    """The refusal that could actually hurt someone if it slipped."""
+    assert "You are reception, not a clinician" in rendered
+    assert "Never diagnose" in rendered
+    assert "Never interpret a test result" in rendered
+    # Medication is the specific case a receptionist is most often pushed on.
+    assert "Never advise on any medicine" in rendered
 
 
-def test_prompt_covers_the_other_out_of_scope_categories():
-    from voice_agent.prompts import render_prompt
+def test_prompt_puts_emergencies_before_everything_else(rendered):
+    """Booking chest pain into a routine slot is the worst failure available."""
+    assert "Emergencies come first" in rendered
+    assert "chest pain" in rendered
+    assert "Do not offer an appointment instead" in rendered
+    assert "When in doubt, treat it as an emergency" in rendered
+    # The number is interpolated from the profile, not hardcoded in the prompt.
+    assert load_profile()["emergency_number"] in rendered
 
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
-    )
+
+def test_prompt_requires_checking_availability_before_offering_a_time(rendered):
+    assert "Always call check_availability before you offer a time" in rendered
+    assert "Never invent a slot" in rendered
+
+
+def test_prompt_requires_confirming_which_appointment_before_cancelling(rendered):
+    assert "Always confirm which appointment you mean before you cancel" in rendered
+    assert "Cancelling the wrong one" in rendered
+
+
+def test_prompt_covers_the_other_out_of_scope_categories(rendered):
     for topic in (
-        "Legal, financial, tax",
-        "Programming help",
-        "General knowledge",
-        "Personal questions about you",
+        "Legal, financial and insurance-claim advice",
+        "General knowledge, news, weather, maths, code",
         "Anyone abusive",
-        "wrong number",
+        "A wrong number",
+        "Asking for test results over the phone",
+        "repeat prescription",
     ):
         assert topic in rendered, topic
 
 
-def test_prompt_does_not_leak_its_own_instructions():
-    from voice_agent.prompts import render_prompt
-
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
-    )
+def test_prompt_does_not_leak_its_own_instructions(rendered):
     assert "Do not recite them" in rendered
     # The escalation contact is interpolated, not left as a placeholder.
     assert "{escalation_contact}" not in rendered
@@ -377,12 +537,7 @@ def test_greeting_is_speakable():
         assert len(line.split()) <= 20, key
 
 
-def test_prompt_says_when_to_end_the_call():
-    from voice_agent.prompts import render_prompt
-
-    rendered = render_prompt(
-        "receptionist", build_prompt_variables(load_profile(), Settings.load())
-    )
+def test_prompt_says_when_to_end_the_call(rendered):
     assert "end_call" in rendered
     assert "anything else" in rendered
 

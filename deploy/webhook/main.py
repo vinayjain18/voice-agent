@@ -7,6 +7,10 @@ Environment variables required (set in the Vercel project settings):
     WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, WHATSAPP_VERIFY_TOKEN,
     WHATSAPP_APP_SECRET, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET,
     LIVEKIT_AGENT_NAME
+
+For the reminder endpoint, additionally:
+    APPOINTMENTS_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_JSON_B64,
+    REMINDER_TRIGGER_SECRET, REMINDER_CHANNEL
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from livekit.protocol.rtc import SessionDescription
 from wa.payload import WhatsAppCallEvent, parse_call_events
 
 from livekit import api
+from voice_agent.reminders import run_once
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("wa.webhook")
@@ -151,3 +156,37 @@ def _signature_ok(app_secret: str, raw: bytes, header: str | None) -> bool:
         return False
     expected = hmac.new(app_secret.encode(), raw, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header.removeprefix("sha256="))
+
+
+def _reminder_secret_ok(expected: str, request: Request) -> bool:
+    """Guard the trigger endpoint. It sits on a public URL."""
+    supplied = request.headers.get("x-reminder-secret", "")
+    if not supplied:
+        authorization = request.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+    return bool(supplied) and hmac.compare_digest(expected, supplied)
+
+
+@app.post("/tasks/reminders")
+async def reminders(request: Request) -> Response:
+    """Run one reminder pass. Called on a timer, see deploy/appsscript/.
+
+    Safe to call more often than needed and safe to call twice at once: a row is
+    claimed before it is dialled, so the second pass skips it.
+    """
+    expected = _env("REMINDER_TRIGGER_SECRET")
+    if not expected:
+        logger.error("REMINDER_TRIGGER_SECRET is not set, refusing to run unguarded")
+        return Response(status_code=503, content="reminder trigger is not configured")
+
+    if not _reminder_secret_ok(expected, request):
+        logger.warning("rejected a reminder trigger with a bad secret")
+        return Response(status_code=403, content="bad secret")
+
+    result = await run_once()
+    return Response(
+        status_code=200 if not result.error else 500,
+        content=json.dumps(result.as_dict()),
+        media_type="application/json",
+    )

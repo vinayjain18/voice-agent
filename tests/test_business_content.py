@@ -27,11 +27,13 @@ def test_faqs_load():
         assert item["q"] and item["a"]
 
 
-def test_prompt_includes_faqs_and_case_studies(rendered):
+def test_prompt_includes_the_faqs_and_leaves_no_placeholders(rendered):
     assert "{" not in rendered
-    assert "ChooseMyCar" in rendered
-    assert "Karyalo" in rendered
-    assert "How much do you charge" in rendered
+    assert "How much is the consultation?" in rendered
+    assert "Can I cancel or change my appointment?" in rendered
+    # Facts come from the profile, not from prose in the prompt.
+    assert load_profile()["doctor_name"] in rendered
+    assert load_profile()["address"] in rendered
 
 
 def test_content_has_no_dashes_or_markup(rendered):
@@ -45,5 +47,8 @@ def test_editorial_comment_keys_are_not_sent_to_the_model():
     assert "_comment" not in profile.as_prompt_vars()
 
 
-def test_agent_is_told_never_to_quote_a_price(rendered):
-    assert "Never quote a price" in rendered
+def test_agent_is_told_never_to_give_medical_advice(rendered):
+    """A clinic may quote a consultation fee. It may never advise on treatment."""
+    flat = " ".join(rendered.split())
+    assert "You are reception, not a clinician" in flat
+    assert "Never diagnose" in flat

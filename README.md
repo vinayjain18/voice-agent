@@ -1,7 +1,8 @@
 # Voice Agent
 
-A low-latency voice agent that answers a phone call, holds a real conversation
-about your business, and books a callback.
+A low-latency voice agent that answers a clinic's phone, holds a real
+conversation with a patient, books them a real appointment slot, and rings them
+back shortly before it.
 
 The same code runs four ways with no changes: **your terminal**, **a browser**,
 **a real phone number**, and **WhatsApp**.
@@ -41,6 +42,8 @@ environment variable. Every provider is swappable the same way.
   - [The prompt](#the-prompt)
   - [Adding a tool](#adding-a-tool)
 - [What the agent does on a call](#what-the-agent-does-on-a-call)
+- [Appointment store](#appointment-store)
+- [Reminder calls](#reminder-calls)
 - [Where calls end up](#where-calls-end-up)
 - [Observability](#observability)
   - [The conversation log](#the-conversation-log)
@@ -67,7 +70,7 @@ environment variable. Every provider is swappable the same way.
 - **Costs are itemised** per call: tokens, characters, audio seconds, and a total.
 - **Everything the agent says is data**, not code. Facts live in JSON, behaviour
   lives in a Markdown prompt.
-- **195 tests**, none of which touch the network, so the suite runs in about a
+- **275 tests**, none of which touch the network, so the suite runs in about a
   second.
 
 ---
@@ -543,13 +546,16 @@ is a reliable way to stop a tool being called too early.
   than generated, so there is no delay before the caller hears anything.
 - **Answers** from the FAQ and profile, and says it will follow up rather than
   guessing when it does not know.
-- **Books a callback** once it has a name, a day and a time, and confirms the
-  time back in the caller's own words rather than converting it.
+- **Checks real availability** before offering any time. It cannot invent a slot:
+  the grid comes from the clinic's own consulting hours minus what is booked.
+- **Books, moves and cancels** appointments, confirming the time back in the
+  caller's own words rather than converting it, and reading out a four digit
+  booking number once.
+- **Finds an existing appointment** from the number the patient is calling on, so
+  cancelling usually needs nothing but a yes.
 - **Never asks for a phone number or email.** The number comes from the call.
-- **Declines** health, legal, financial and programming questions, and points to
-  the right kind of professional instead.
-- **Handles the calls a business line actually gets**: sales calls, job
-  applications, existing clients, wrong numbers.
+- **Sends emergencies to emergency services** immediately instead of booking
+  them, and gives **no** medical advice of any kind.
 - **Hangs up** only after asking whether there is anything else *and* hearing the
   answer. If the caller is mid-sentence, it stays on the line.
 
@@ -557,28 +563,189 @@ Everything above is prompt and configuration. None of it requires code changes.
 
 ---
 
+## Appointment store
+
+Appointments live in **one Google Sheet**, not on disk. Three separate processes
+need the same rows: the agent taking a booking, a later call cancelling it, and
+the reminder scanner. There is no local fallback, and the agent refuses to start
+without a sheet rather than tell a patient they are booked when nothing saved.
+
+### Setting it up
+
+**1. Create a Google Cloud project and enable the Sheets API**
+
+```
+console.cloud.google.com  ->  new project  ->  APIs & Services  ->  Library
+  ->  "Google Sheets API"  ->  Enable
+```
+
+**2. Make a service account and download its key**
+
+```
+APIs & Services  ->  Credentials  ->  Create credentials  ->  Service account
+  ->  name it (e.g. "voice-agent")  ->  Done
+  ->  open it  ->  Keys  ->  Add key  ->  Create new key  ->  JSON
+```
+
+A JSON file downloads. It contains a private key: treat it like a password and
+do not commit it.
+
+**3. Create the sheet and share it with the service account**
+
+Make a new spreadsheet, rename the first tab to `appointments`, and leave it
+empty. The agent writes the header row itself on first use, and refuses to write
+if it finds a header it does not recognise.
+
+Copy the service account's email (it looks like
+`voice-agent@your-project.iam.gserviceaccount.com`) and share the sheet with it
+as **Editor**.
+
+The sheet id is the long string in its URL:
+
+```
+https://docs.google.com/spreadsheets/d/THIS_PART_HERE/edit
+```
+
+**4. Put both into your environment**
+
+```bash
+# base64 because the private key contains newlines that most dashboards mangle
+base64 -i service-account.json | tr -d '\n'
+```
+
+```
+APPOINTMENTS_SHEET_ID=<the id from the URL>
+GOOGLE_SERVICE_ACCOUNT_JSON_B64=<the base64 blob>
+```
+
+For local development you can skip the encoding and point at the file instead:
+
+```
+GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+```
+
+### What the sheet holds
+
+One row per appointment, newest first:
+
+```
+booking_ref  status  patient_name  patient_number  slot_date  slot_time
+reason  raw_request  reminder_status  reminder_attempts  reminder_last_utc
+created_utc  cancelled_utc  room
+```
+
+Staff can cancel by editing `status` to `cancelled`; the agent picks that up on
+the next call and frees the slot. Nothing here ever clears a range, so a redeploy
+cannot erase existing rows.
+
+> **Before any real patient data goes in this sheet:** it holds names, phone
+> numbers and reason for visit, which is health-adjacent personal data under
+> India's DPDP Act. Use a Google Workspace account rather than consumer Gmail,
+> share it only with named people, and turn link sharing off.
+
+### Consulting hours and slots
+
+The bookable grid is derived from `schedule` in
+`src/voice_agent/business/profile.json`:
+
+```json
+"schedule": {
+  "timezone": "Asia/Kolkata",
+  "slot_minutes": 15,
+  "booking_horizon_days": 30,
+  "weekly": {
+    "monday": [["10:00", "13:00"], ["17:00", "20:00"]],
+    "sunday": []
+  }
+}
+```
+
+The same object produces the spoken "we're open ..." line, so the hours the agent
+quotes and the slots it will actually offer cannot drift apart.
+
+---
+
+## Reminder calls
+
+Half an hour before an appointment, the agent rings the patient to check they can
+still make it, and moves or cancels it there and then if not.
+
+```
+Apps Script timer  ──►  POST /tasks/reminders  ──►  claim the row
+   every 5 min           on Vercel                  dial via LiveKit
+                                                    record the outcome
+```
+
+The row is marked `sending` **before** the call is placed, so two overlapping
+runs cannot ring the same patient twice, and a run that dies mid-call is retried
+once the claim goes stale. Restarting the server resumes exactly where it left
+off, because the sheet is the only state.
+
+### Why the timer lives in Apps Script
+
+Vercel's Hobby plan allows a cron job **once per day**, and rejects a more
+frequent expression at deploy time. Apps Script runs on a five minute timer for
+free. It only makes one HTTP call: every decision stays in Python, in this repo,
+under test.
+
+### Setting it up
+
+**1. Choose a shared secret** and set it on Vercel:
+
+```bash
+vercel env add REMINDER_TRIGGER_SECRET
+```
+
+Use `vercel env add`, not `-e` on a deploy: that only applies to one deployment
+and the next one comes up unconfigured.
+
+The endpoint refuses to run at all if this is unset, since it sits on a public
+URL.
+
+**2. Install the trigger.** Open the appointments spreadsheet, then
+`Extensions > Apps Script`, paste in `deploy/appsscript/reminder-trigger.gs`, and
+under `Project Settings > Script Properties` add:
+
+```
+REMINDER_ENDPOINT   https://<your-webhook>.vercel.app/tasks/reminders
+REMINDER_SECRET     the same value as REMINDER_TRIGGER_SECRET
+```
+
+Run `installTrigger` once and accept the permissions prompt. Check `Executions`
+after a few minutes.
+
+**3. Turn the calls on.** `REMINDER_CHANNEL` defaults to `dry_run`, which logs
+the call it would have placed and marks the reminder sent. The whole pass is
+exercised that way, so you can confirm the timing before anything rings.
+
+```
+REMINDER_CHANNEL=whatsapp_call
+```
+
+> **This needs a WhatsApp business number outside the US, Canada, Egypt, Vietnam
+> and Nigeria.** Meta excludes those from business-initiated calling, and the
+> free test number is a US one. Nothing else about the setup changes.
+>
+> Permission is normally automatic: a patient who **rang the clinic** grants
+> temporary call permission for seven days by doing so, which covers any
+> appointment booked within a week.
+
+You can trigger a pass by hand:
+
+```bash
+curl -X POST https://<your-webhook>.vercel.app/tasks/reminders \
+  -H "X-Reminder-Secret: <the secret>"
+```
+
+---
+
 ## Where calls end up
 
-**Leads** land in `data/leads.csv`, one row per booking or message:
-
-```
-timestamp_utc,kind,name,contact,reason,preferred_date,preferred_time,raw_request,caller_number,room
-```
-
-`raw_request` keeps what the caller actually said about timing ("today at two,
-your time"), so a human can sanity-check the parsed date. Writes are locked, so
-concurrent calls cannot interleave rows, and a failure to save is logged rather
-than allowed to crash a live call.
-
-Changing the columns rotates the old file to `leads.legacy-<timestamp>.csv`
-automatically, because appending new-shaped rows under an old header silently
-misaligns every column.
+**Appointments** go to the Google Sheet described above.
 
 **Transcripts** are written to `data/transcripts/<timestamp>_<room>.json`, with
 the full conversation, the duration and the itemised cost. Set
-`SAVE_TRANSCRIPTS=false` to turn them off.
-
-`data/` is gitignored.
+`SAVE_TRANSCRIPTS=false` to turn them off. `data/` is gitignored.
 
 ---
 
@@ -592,7 +759,7 @@ Every call is logged as it happens:
 << agent | Thank you for calling Acme. My name is Emma. How may I help you today?
 >> user  | Hi, do you build mobile apps?  [en]
 << agent | We do, yeah. iOS and Android both. What are you looking to build?  [waited 1.2s]
--- tool  | book_callback(name='Ravi' preferred_time='17:30') -> Saved. Now say it back...
+-- tool  | book_appointment(name='Ravi' time='17:30') -> Saved. Now say it back...
 !! user  | 1.4s of speech produced no transcript
 ```
 
@@ -673,25 +840,37 @@ voice-agent/
 │   │   └── faq.json             Spoken question and answer pairs
 │   ├── providers/               The only place models are constructed
 │   │   ├── stt.py  llm.py  tts.py  vad.py
+│   ├── scheduling.py            Slot grid and spoken opening hours
 │   ├── storage/
-│   │   ├── leads.py             CSV, locked, with schema rotation
+│   │   ├── sheets.py            Minimal async Google Sheets client
+│   │   ├── appointments.py      The appointment store
 │   │   └── transcripts.py       Per-call JSON
+│   ├── reminders/
+│   │   ├── channels.py          How a reminder is delivered
+│   │   └── runner.py            One scan: claim, send, record
 │   ├── observability/
 │   │   ├── conversation.py      The conversation log
 │   │   ├── metrics.py           Per-turn latency
 │   │   └── usage.py             Cost summary
 │   └── whatsapp/                Webhook for local development
-├── deploy/webhook/              Self-contained webhook for serverless
+├── deploy/
+│   ├── webhook/                 Self-contained webhook + reminder endpoint
+│   │   └── voice_agent/         Generated copy, see scripts/sync_webhook_bundle.py
+│   └── appsscript/              The five minute reminder timer
 ├── livekit/                     Dispatch rule and trunk config
-├── scripts/make_call.py         Place an outbound call
-├── tests/                       195 tests, no network calls
+├── scripts/
+│   ├── make_call.py             Place an outbound call
+│   └── sync_webhook_bundle.py   Refresh the Vercel copy
+├── tests/                       275 tests, no network calls
 └── .env.example                 Every setting, documented
 ```
 
-Two rules keep this navigable. **Models are only ever constructed in
+Three rules keep this navigable. **Models are only ever constructed in
 `providers/`**, which is what makes a provider swap one environment variable.
-And **`livekit.plugins` imports stay at module scope**, because plugin
-registration must happen on the main thread; a test enforces this statically.
+**`livekit.plugins` imports stay at module scope**, because plugin registration
+must happen on the main thread. And **`deploy/webhook/voice_agent/` is
+generated**, never hand-edited: run `scripts/sync_webhook_bundle.py` after
+touching `storage/` or `reminders/`. A test enforces each of the three.
 
 ---
 
@@ -699,7 +878,7 @@ registration must happen on the main thread; a test enforces this statically.
 
 ```bash
 uv sync                  # install
-uv run pytest            # 195 tests, about a second, no network calls
+uv run pytest            # 275 tests, about six seconds, no network calls
 uv run ruff check .      # lint
 ```
 

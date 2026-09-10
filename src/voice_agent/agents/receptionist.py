@@ -1,10 +1,13 @@
-"""The first concrete agent: a front-desk receptionist."""
+"""The clinic receptionist: answers questions and manages appointments."""
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from datetime import datetime
+import time as clock
+from datetime import date, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from livekit.agents import (
@@ -20,18 +23,40 @@ from livekit.agents import (
 from voice_agent.business import BusinessProfile, load_profile
 from voice_agent.config import Settings
 from voice_agent.prompts import render_prompt
-from voice_agent.storage import append_lead
+from voice_agent.scheduling import (
+    Schedule,
+    available_slots,
+    next_available,
+    render_hours,
+    speak_slot,
+)
+from voice_agent.storage import (
+    Appointment,
+    AppointmentStore,
+    SlotTaken,
+    build_store,
+)
 
 logger = logging.getLogger(__name__)
 
-# The business runs on India time, and callers speak in it.
 BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
 
+# Nothing is offered closer than this to now. A patient needs time to travel,
+# and a slot starting in four minutes helps nobody.
+MIN_NOTICE_MINUTES = 30
 
-# The greeting is spoken verbatim rather than generated. A model-written opening
-# varied on every call, and cost an LLM round trip plus TTS at the one moment a
-# caller is least willing to hear silence. These say what has *already* been
-# said, so the model does not greet a second time.
+# How many free times to read out. More than three is a list, and a list read
+# aloud is impossible to hold in your head.
+MAX_OFFERS = 3
+
+# How long the cached view of the sheet is trusted before a tool re-reads it.
+CACHE_SECONDS = 45.0
+
+# Distinguishes "work the store out from settings" from "there is no store",
+# which None alone cannot express.
+AUTO_STORE: Any = object()
+
+
 INBOUND_OPENING = """The call has just connected and you have ALREADY said this
 out loud, word for word:
 
@@ -51,19 +76,26 @@ Do not greet again and do not repeat the question. Wait for their answer.
 If they say it is a good moment, say briefly why you are calling. If they say it
 is a bad time, offer to call back and ask when suits them. Do not push."""
 
+REMINDER_OPENING = """You placed this call to remind a patient about an
+appointment. You have ALREADY said this out loud, word for word:
 
-# What the model is told to say once end_call fires. It is the last thing the
-# caller hears, so it is specified rather than left to "say goodbye": vague
-# instructions produced either nothing at all or a four sentence farewell that
-# ran past the hangup. One sentence, and direction-aware, because thanking
-# someone for calling when we rang them is an obvious tell.
+    "{greeting}"
+
+{appointment}
+
+Do not greet again. Once they answer, say which appointment it is and ask
+whether they can still make it. If they can, confirm and let them go. If they
+cannot, offer to move or cancel it on this call. Keep it short: they did not
+ask to be rung."""
+
+
 INBOUND_GOODBYE = """Close the call in ONE short sentence. Thank them for
 calling and wish them well. Vary the wording rather than saying the same line
 every time, for example "Thanks for calling, have a good day.", "Thanks for
 calling us, take care.", or "Lovely, thanks for calling. Have a good one."
 
-Say nothing else. Do not ask another question, do not recap the booking, and do
-not add a second sentence."""
+Say nothing else. Do not ask another question, do not recap the appointment, and
+do not add a second sentence."""
 
 OUTBOUND_GOODBYE = """Close the call in ONE short sentence. Thank them for their
 time and wish them well, for example "Thanks for your time, have a good day."
@@ -72,13 +104,17 @@ Never thank them for calling - you called them. Say nothing else, and do not ask
 another question."""
 
 
-def opening_line(profile: BusinessProfile, *, outbound: bool = False) -> str:
-    """The exact words spoken as the call connects.
+def opening_line(
+    profile: BusinessProfile, *, outbound: bool = False, reminder: bool = False
+) -> str:
+    """The exact words spoken as the call connects."""
+    if reminder:
+        key = "greeting_reminder"
+    elif outbound:
+        key = "greeting_outbound"
+    else:
+        key = "greeting_inbound"
 
-    Content, not code: edit business/profile.json. Falls back to a plain line
-    built from the profile so a missing key cannot leave a caller in silence.
-    """
-    key = "greeting_outbound" if outbound else "greeting_inbound"
     try:
         greeting = str(profile[key]).strip()
     except KeyError:
@@ -86,20 +122,41 @@ def opening_line(profile: BusinessProfile, *, outbound: bool = False) -> str:
     if greeting:
         return greeting
     return (
-        f"Thank you for calling {profile['business_name']}. "
-        f"My name is {profile['agent_name']}. How may I help you today?"
+        f"Thanks for calling {profile['business_name']}. "
+        f"This is {profile['agent_name']}. How can I help you?"
     )
 
 
 def build_prompt_variables(
-    profile: BusinessProfile, settings: Settings, *, outbound: bool = False
+    profile: BusinessProfile,
+    settings: Settings,
+    *,
+    outbound: bool = False,
+    reminder_for: Appointment | None = None,
 ) -> dict[str, str]:
     """Business facts plus the things only known at call time."""
     variables = profile.as_prompt_vars()
-    template = OUTBOUND_OPENING if outbound else INBOUND_OPENING
-    variables["opening_instructions"] = template.format(
-        greeting=opening_line(profile, outbound=outbound)
-    )
+
+    if reminder_for is not None:
+        starts = reminder_for.starts_at(BUSINESS_TZ)
+        when = (
+            speak_slot(starts, today=datetime.now(BUSINESS_TZ).date())
+            if starts
+            else f"{reminder_for.slot_date} at {reminder_for.slot_time}"
+        )
+        variables["opening_instructions"] = REMINDER_OPENING.format(
+            greeting=opening_line(profile, reminder=True),
+            appointment=(
+                f"The appointment is {when}, booked under the name "
+                f"{reminder_for.patient_name or 'unknown'}, booking number "
+                f"{reminder_for.booking_ref}."
+            ),
+        )
+    else:
+        template = OUTBOUND_OPENING if outbound else INBOUND_OPENING
+        variables["opening_instructions"] = template.format(
+            greeting=opening_line(profile, outbound=outbound)
+        )
 
     # The model has no idea what today is. Without this it invents dates when a
     # caller says "next Tuesday", confidently and wrongly.
@@ -116,9 +173,6 @@ def build_prompt_variables(
     return variables
 
 
-# Pure hesitation noises. Deliberately does NOT include "hmm", "mm" or "mhm":
-# those are often a real answer to a yes/no question, and discarding them would
-# leave the caller thinking they had replied.
 HESITATION_ONLY = frozenset({"uh", "uhh", "um", "umm", "er", "err", "erm"})
 
 
@@ -126,13 +180,11 @@ def is_noise_turn(text: str) -> bool:
     """True when a user turn carries no actual speech.
 
     Deepgram flushes a turn when the VAD hears something the model cannot
-    transcribe - a cough, line noise, a half word. That arrives as an empty or
-    near-empty transcript, and answering it makes the agent talk into silence.
+    transcribe. Answering that makes the agent talk into silence, repeatedly.
     """
     stripped = (text or "").strip()
     if not stripped:
         return True
-    # Punctuation or stray marks with no letters or digits anywhere.
     if not any(char.isalnum() for char in stripped):
         return True
     words = [w.strip(".,!?;:'\"").lower() for w in stripped.split()]
@@ -140,8 +192,6 @@ def is_noise_turn(text: str) -> bool:
     return bool(words) and all(word in HESITATION_ONLY for word in words)
 
 
-# Short things a caller says when they are actually done. A closing answer is
-# always brief; anything longer is a fresh request wearing a polite hat.
 DONE_WORDS = frozenset(
     {
         "no", "nope", "nah", "nahi", "nothing", "none", "bas",
@@ -155,18 +205,14 @@ DONE_PHRASES = (
     "that's it", "thats it", "we are good",
 )
 
-# Above this, it is a sentence with content in it, not a sign-off. "You can set
-# it up today at two PM South African time" is eleven words and must never read
-# as permission to hang up.
 MAX_CLOSING_ANSWER_WORDS = 8
 
 
 def caller_sounds_finished(text: str) -> bool:
     """True when the caller's last turn reads as "no, nothing else".
 
-    This is the gate on hanging up. It is deliberately strict: refusing to end a
-    finished call costs one extra question, while ending an unfinished one cuts
-    the caller off mid-sentence, which is what kept happening.
+    Deliberately strict: refusing to end a finished call costs one extra
+    question, while ending an unfinished one cuts the caller off mid-sentence.
     """
     lowered = (text or "").lower()
     if any(phrase in lowered for phrase in DONE_PHRASES):
@@ -188,6 +234,35 @@ def last_caller_turn(session: object) -> str:
     return ""
 
 
+class AppointmentCache:
+    """A short-lived view of the sheet, so reads during a call are not network calls.
+
+    Availability is checked several times in a normal booking conversation and a
+    Sheets round trip lands inside a voice turn. Writes always go straight to the
+    sheet and then invalidate this.
+    """
+
+    def __init__(self, store: AppointmentStore) -> None:
+        self._store = store
+        self._items: list[Appointment] = []
+        self._loaded_at = 0.0
+
+    async def items(self, *, force: bool = False) -> list[Appointment]:
+        if force or clock.monotonic() - self._loaded_at > CACHE_SECONDS:
+            self._items = await self._store.all()
+            self._loaded_at = clock.monotonic()
+        return self._items
+
+    async def taken(self, *, force: bool = False) -> set[datetime]:
+        moments = (
+            item.starts_at(BUSINESS_TZ) for item in await self.items(force=force) if item.is_active
+        )
+        return {moment for moment in moments if moment is not None}
+
+    def invalidate(self) -> None:
+        self._loaded_at = 0.0
+
+
 class ReceptionistAgent(Agent):
     def __init__(
         self,
@@ -195,19 +270,28 @@ class ReceptionistAgent(Agent):
         settings: Settings | None = None,
         *,
         outbound: bool = False,
+        store: AppointmentStore | None = AUTO_STORE,
+        reminder_for: Appointment | None = None,
     ) -> None:
         self.profile = profile or load_profile()
         self.settings = settings or Settings.load()
-        self.outbound = outbound
+        self.outbound = outbound or reminder_for is not None
+        self.schedule: Schedule = self.profile.schedule
+        self.store = build_store(self.settings) if store is AUTO_STORE else store
+        self.cache = AppointmentCache(self.store) if self.store else None
+        self.reminder_for = reminder_for
         self._goodbye_instructions = (
-            OUTBOUND_GOODBYE if outbound else INBOUND_GOODBYE
+            OUTBOUND_GOODBYE if self.outbound else INBOUND_GOODBYE
         )
 
         super().__init__(
             instructions=render_prompt(
                 "receptionist",
                 build_prompt_variables(
-                    self.profile, self.settings, outbound=outbound
+                    self.profile,
+                    self.settings,
+                    outbound=outbound,
+                    reminder_for=reminder_for,
                 ),
             ),
         )
@@ -215,18 +299,7 @@ class ReceptionistAgent(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
-        """Drop turns that contain no speech, instead of replying to them.
-
-        Without this the agent answers its own silence. A real call showed the
-        cost: the VAD fired, Deepgram returned nothing usable, and the agent
-        generated a reply anyway. Because the caller still had not said
-        anything, it did it again, and again, stacking four questions and a
-        stray "No further response." into one breath before the caller could
-        get a word in.
-
-        Raising StopResponse discards the turn cleanly; the library documents
-        this as the supported way to skip a generation.
-        """
+        """Drop turns that contain no speech, instead of replying to them."""
         text = new_message.text_content or ""
         if is_noise_turn(text):
             logger.info("ignoring a user turn with no speech in it: %r", text)
@@ -234,121 +307,346 @@ class ReceptionistAgent(Agent):
 
     @function_tool
     async def get_business_hours(self, context: RunContext) -> str:
-        """Return the opening hours of the business.
+        """Return the clinic's consulting hours.
 
-        Call this when the caller asks when the business is open or available.
+        Call this when the caller asks when the clinic is open.
         """
-        return f"We're open {self.profile['hours']}."
+        return render_hours(self.schedule)
 
     @function_tool
-    async def book_callback(
+    async def check_availability(self, context: RunContext, day: str = "") -> str:
+        """Find appointment times that are actually free.
+
+        Call this BEFORE offering any time. Never invent a slot and never
+        promise one you have not checked here first.
+
+        Args:
+            day: The day to check, as YYYY-MM-DD. Work it out from today's date
+                in your instructions. Leave empty to get the soonest available
+                times on any day.
+        """
+        if self.cache is None:
+            return _no_store()
+
+        try:
+            taken = await self.cache.taken()
+        except Exception:
+            logger.exception("could not read availability")
+            return (
+                "The diary did not load. Apologise, say you cannot see the "
+                "appointment book right now, and offer to have the desk call "
+                "them straight back. Do not guess at any times."
+            )
+
+        now = datetime.now(BUSINESS_TZ)
+        today = now.date()
+
+        if day.strip():
+            wanted = _parse_date(day)
+            if wanted is None:
+                return f"'{day}' is not a date. Work out YYYY-MM-DD and call this again."
+            if wanted < today:
+                return (
+                    f"{day} has already gone. Do not book it. Assume they meant the "
+                    "next one and check which date they mean."
+                )
+            if wanted > self.schedule.horizon_end(today):
+                return (
+                    f"We only book {self.schedule.booking_horizon_days} days ahead. "
+                    "Tell them that warmly and offer something sooner."
+                )
+            if not self.schedule.is_open_on(wanted):
+                return (
+                    f"The clinic is closed on {wanted.strftime('%A %d %B')}. Say so "
+                    f"warmly, say when we are open, and offer the nearest day."
+                )
+
+            free = available_slots(
+                self.schedule,
+                wanted,
+                taken,
+                now=now,
+                min_notice_minutes=MIN_NOTICE_MINUTES,
+            )
+            if not free:
+                fallback = next_available(
+                    self.schedule,
+                    taken,
+                    now=now,
+                    limit=MAX_OFFERS,
+                    min_notice_minutes=MIN_NOTICE_MINUTES,
+                )
+                if not fallback:
+                    return "Nothing is free at all in the next few weeks. Offer to have the desk call them back."
+                offers = _spoken_offers(fallback, today)
+                return (
+                    f"{wanted.strftime('%A %d %B')} is fully booked. Say so, then "
+                    f"offer these instead: {offers}. Offer them, do not list them all."
+                )
+            offers = _spoken_offers(free[:MAX_OFFERS], today)
+            return f"Free on {wanted.strftime('%A %d %B')}: {offers}. Offer two of these, not all."
+
+        soonest = next_available(
+            self.schedule,
+            taken,
+            now=now,
+            limit=MAX_OFFERS,
+            min_notice_minutes=MIN_NOTICE_MINUTES,
+        )
+        if not soonest:
+            return "Nothing is free in the next few weeks. Offer to have the desk call them back."
+        return f"Soonest free: {_spoken_offers(soonest, today)}. Offer two of these, not all."
+
+    @function_tool
+    async def book_appointment(
         self,
         context: RunContext,
         name: str,
-        preferred_date: str,
-        preferred_time: str,
-        reason: str,
+        date: str,
+        time: str,
+        reason: str = "",
         raw_request: str = "",
     ) -> str:
-        """Book a call with the team at a specific date and time.
+        """Book an appointment at a specific date and time.
 
-        This is the tool you should be aiming for in almost every conversation.
-        Call it once you have the caller's name, a day AND a time.
+        Call this once you have the caller's name, a day AND a time, and only
+        after check_availability confirmed that time is free.
 
         Never ask for a phone number or an email. We already have the caller's
         number from the call itself and it is recorded automatically.
 
         Args:
-            name: The caller's name.
-            preferred_date: The date as YYYY-MM-DD. Work it out from today's
-                date given in your instructions - never guess the year.
-            preferred_time: 24-hour HH:MM in India time, e.g. "15:00". Required.
-                If the caller has only given a day, ask what time suits them
-                before calling this.
-            reason: A one-line summary of what they want to discuss.
+            name: The patient's name.
+            date: The date as YYYY-MM-DD. Work it out from today's date given in
+                your instructions - never guess the year.
+            time: 24-hour HH:MM in India time, e.g. "17:30". Required. If the
+                caller has only given a day, ask what time suits them first.
+            reason: One short line on what they need to be seen about. Never a
+                diagnosis, just what they told you.
             raw_request: What the caller actually said about timing, e.g.
-                "next Tuesday afternoon", so a human can double-check.
+                "tomorrow evening", so you can say it back in their own words.
         """
-        room_name, caller = _call_identity()
+        if self.store is None or self.cache is None:
+            return _no_store()
 
         if not (name or "").strip():
             return "Do not save yet - ask the caller for their name, then call this tool again."
-        if not (preferred_time or "").strip():
+        if not (time or "").strip():
             return (
                 "Do not save yet - no time was given. Ask what time of day suits "
                 "them, then call this tool again."
             )
 
-        append_lead(
-            self.settings.storage.leads_file,
-            kind="booking",
-            name=name,
-            contact=caller,
-            reason=reason,
-            preferred_date=preferred_date,
-            preferred_time=preferred_time,
-            raw_request=raw_request,
-            caller_number=caller,
-            room=room_name,
-        )
-        # Confirm in the caller's words, not ours. The CSV needs India time so a
-        # human can act on it; the caller needs to hear the time they actually
-        # gave. A caller who said "two PM South African time" and hears "five
-        # thirty" back has no idea whether they were understood.
-        their_words = (raw_request or "").strip()
-        spoken = their_words if their_words else f"{preferred_date} at {preferred_time}"
+        slot = _parse_slot(date, time)
+        if slot is None:
+            return f"'{date} {time}' is not a date and time. Work them out and call this again."
+
+        now = datetime.now(BUSINESS_TZ)
+        if slot <= now:
+            return "That time has already passed. Do not book it. Offer the next free slot instead."
+        if not self.schedule.is_valid_slot(slot):
+            return (
+                f"{time} is not one of our appointment times. Call check_availability "
+                "and offer a time it gives you."
+            )
+
+        room_name, caller = _call_identity()
+
+        try:
+            appointment = await self.store.create(
+                patient_name=name,
+                patient_number=caller,
+                slot=slot,
+                reason=reason,
+                raw_request=raw_request,
+                room=room_name,
+            )
+        except SlotTaken:
+            self.cache.invalidate()
+            return (
+                "Someone just took that slot. Apologise briefly, call "
+                "check_availability again and offer what is actually free."
+            )
+        except Exception:
+            logger.exception("could not save the appointment")
+            return (
+                "The appointment did NOT save. Do not tell them it is booked. "
+                "Apologise, say the system is not letting you book right now, and "
+                "say the desk will call them straight back to confirm."
+            )
+
+        self.cache.invalidate()
+        spoken = (raw_request or "").strip() or speak_slot(slot, today=now.date())
+        digits = " ".join(appointment.booking_ref)
         return (
-            f"Saved. Now say it back to {name} out loud using THEIR OWN words: "
-            f"\"{spoken}\". Do not convert it, do not say India time, and do not "
-            f"name a weekday if they said today or tomorrow. Then stop and wait "
-            f"for them to reply. Do not end the call in this reply."
+            f"Saved. Now say it back to them out loud using THEIR OWN words: "
+            f'"{spoken}". Do not convert it and do not name a weekday if they said '
+            f"today or tomorrow. Then read the booking number once, slowly, as "
+            f"digits: {digits}. Tell them they can use that or just this phone "
+            f"number to change it. Then stop and wait. Do not end the call in this reply."
         )
 
     @function_tool
-    async def take_callback_details(
-        self,
-        context: RunContext,
-        name: str,
-        reason: str,
-        why_no_time: str,
-    ) -> str:
-        """Fallback only. Take a message when no time could be agreed.
+    async def find_my_appointment(self, context: RunContext) -> str:
+        """Look up the caller's upcoming appointments from the number they rang on.
 
-        Do NOT use this as your first choice. Use book_callback instead. Only
-        use this after you have actually asked the caller for a day and a time
-        and they would not or could not give one.
-
-        Never ask for a phone number or an email.
-
-        Args:
-            name: The caller's name.
-            reason: A one-line summary of what they need.
-            why_no_time: What the caller said when you asked for a time, e.g.
-                "wants to check their calendar first". If you have not asked for
-                a time yet, stop and ask before using this tool.
+        Use this first whenever someone wants to check, move or cancel an
+        appointment. Do not ask for their number: this uses it automatically.
         """
-        room_name, caller = _call_identity()
+        if self.store is None:
+            return _no_store()
 
-        if not (name or "").strip():
-            return "Do not save yet - ask the caller for their name, then call this tool again."
-        if not (why_no_time or "").strip():
+        _, caller = _call_identity()
+        if not caller:
             return (
-                "Do not save yet - ask the caller what day and time suits them "
-                "first. Use book_callback if they give you one."
+                "There is no caller number on this call, so nothing can be looked "
+                "up. Ask for the four digit booking number instead."
             )
 
-        append_lead(
-            self.settings.storage.leads_file,
-            kind="message",
-            name=name,
-            contact=caller,
-            reason=reason,
-            raw_request=why_no_time,
-            caller_number=caller,
-            room=room_name,
-        )
-        return f"Noted. Someone will get back to {name} shortly."
+        try:
+            found = await self.store.find_by_number(caller, tz=BUSINESS_TZ)
+        except Exception:
+            logger.exception("could not look up appointments")
+            return "The appointment book did not load. Apologise and offer to have the desk call back."
 
+        if not found:
+            return (
+                "Nothing is booked on this number. Say so gently and ask for the "
+                "four digit booking number, or offer to book them in."
+            )
+
+        today = datetime.now(BUSINESS_TZ).date()
+        lines = [
+            f"{item.booking_ref}: {speak_slot(item.starts_at(BUSINESS_TZ), today=today)}"
+            f" for {item.patient_name}"
+            for item in found
+            if item.starts_at(BUSINESS_TZ)
+        ]
+        if len(lines) == 1:
+            return f"One appointment: {lines[0]}. Say it back and ask if that is the one."
+        return (
+            f"{len(lines)} appointments: {'; '.join(lines)}. Ask which one they mean "
+            "before doing anything."
+        )
+
+    @function_tool
+    async def cancel_appointment(self, context: RunContext, booking_ref: str = "") -> str:
+        """Cancel an appointment.
+
+        Only call this once you have said which appointment you mean and the
+        caller has confirmed it. Cancelling the wrong one means someone turns up
+        to nothing.
+
+        Args:
+            booking_ref: The four digit booking number, if they gave you one.
+                Leave empty to use the appointment on the number they called
+                from, which only works when there is exactly one.
+        """
+        if self.store is None:
+            return _no_store()
+
+        target = await self._resolve(booking_ref)
+        if isinstance(target, str):
+            return target
+
+        try:
+            await self.store.cancel(target.booking_ref, reason="cancelled by caller")
+        except Exception:
+            logger.exception("could not cancel %s", target.booking_ref)
+            return (
+                "The cancellation did NOT save. Do not tell them it is cancelled. "
+                "Say the desk will call them back to sort it out."
+            )
+
+        if self.cache:
+            self.cache.invalidate()
+        today = datetime.now(BUSINESS_TZ).date()
+        when = speak_slot(target.starts_at(BUSINESS_TZ), today=today)
+        return (
+            f"Cancelled the appointment for {when}. Tell them it is cancelled, then "
+            "offer once to book another time. Do not end the call in this reply."
+        )
+
+    @function_tool
+    async def reschedule_appointment(
+        self,
+        context: RunContext,
+        date: str,
+        time: str,
+        booking_ref: str = "",
+        raw_request: str = "",
+    ) -> str:
+        """Move an appointment to a new date and time.
+
+        Use this rather than cancelling and booking again: if the new time turns
+        out to be gone, the caller keeps the appointment they already had.
+
+        Args:
+            date: The new date as YYYY-MM-DD.
+            time: The new time as 24-hour HH:MM in India time.
+            booking_ref: The four digit booking number, if they gave you one.
+                Leave empty to use the appointment on the number they called from.
+            raw_request: What they actually said about the new timing.
+        """
+        if self.store is None or self.cache is None:
+            return _no_store()
+
+        target = await self._resolve(booking_ref)
+        if isinstance(target, str):
+            return target
+
+        slot = _parse_slot(date, time)
+        if slot is None:
+            return f"'{date} {time}' is not a date and time. Work them out and call this again."
+
+        now = datetime.now(BUSINESS_TZ)
+        if slot <= now:
+            return "That time has already passed. Offer a later one."
+        if not self.schedule.is_valid_slot(slot):
+            return (
+                f"{time} is not one of our appointment times. Call check_availability "
+                "and offer a time it gives you."
+            )
+
+        # New booking first. If it fails, the original is untouched.
+        try:
+            moved = await self.store.create(
+                patient_name=target.patient_name,
+                patient_number=target.patient_number,
+                slot=slot,
+                reason=target.reason,
+                raw_request=raw_request or target.raw_request,
+                room=target.room,
+            )
+        except SlotTaken:
+            self.cache.invalidate()
+            return (
+                "That new time was just taken, and their original appointment is "
+                "still in place. Say so, then call check_availability and offer "
+                "what is free."
+            )
+        except Exception:
+            logger.exception("could not create the replacement appointment")
+            return (
+                "The move did NOT go through and the original appointment still "
+                "stands. Say the desk will call them back."
+            )
+
+        try:
+            await self.store.cancel(target.booking_ref, reason=f"moved to {moved.booking_ref}")
+        except Exception:
+            # The new one exists, so the patient has a slot. A duplicate is
+            # visible in the sheet and a human can clear it; losing the booking
+            # entirely would be worse.
+            logger.exception("moved to %s but could not cancel %s", moved.booking_ref, target.booking_ref)
+
+        self.cache.invalidate()
+        spoken = (raw_request or "").strip() or speak_slot(slot, today=now.date())
+        return (
+            f'Moved. Tell them it is now "{spoken}", in their own words. Their '
+            f"booking number stays the same as far as they are concerned, so do "
+            f"not read out a new one. Then stop and wait."
+        )
 
     @function_tool
     async def end_call(self, context: RunContext) -> str:
@@ -359,8 +657,8 @@ class ReceptionistAgent(Agent):
         calling this in the same reply is wrong: the caller never gets to
         answer.
 
-        Do not call this straight after saving a booking. Confirm the day and
-        time out loud first and let them respond.
+        Do not call this straight after saving or cancelling an appointment.
+        Confirm it out loud first and let them respond.
         """
         spoken = last_caller_turn(context.session)
 
@@ -375,11 +673,6 @@ class ReceptionistAgent(Agent):
 
         logger.info("ending the call, caller last said: %r", spoken)
 
-        # Mirrors what EndCallTool does, minus the room deletion: shut the
-        # session down once this turn's speech (which includes the goodbye,
-        # because a non-realtime LLM reuses the same speech handle for the tool
-        # reply) has actually finished playing. main.py's shutdown callback then
-        # drains, hangs up the WhatsApp leg and deletes the room, in that order.
         def _shutdown_session(_: object) -> None:
             context.session.shutdown()
 
@@ -388,27 +681,114 @@ class ReceptionistAgent(Agent):
         def _shutdown_job(event: object) -> None:
             job = get_job_context(required=False)
             if job is not None:
-                job.shutdown(reason=getattr(getattr(event, "reason", None), "value", "user_initiated"))
+                job.shutdown(
+                    reason=getattr(getattr(event, "reason", None), "value", "user_initiated")
+                )
 
         context.session.once("close", _shutdown_job)
 
         return self._goodbye_instructions
+
+    async def _resolve(self, booking_ref: str) -> Appointment | str:
+        """Find the appointment a tool should act on, or say what to ask for."""
+        assert self.store is not None
+
+        ref = (booking_ref or "").strip()
+        if ref:
+            try:
+                found = await self.store.find_by_ref(ref)
+            except Exception:
+                logger.exception("could not look up %s", ref)
+                return "The appointment book did not load. Offer to have the desk call back."
+            if found is None:
+                return (
+                    f"No appointment has the number {ref}. Read it back to check you "
+                    "heard it right, or look it up from their phone number instead."
+                )
+            if not found.is_active:
+                return f"Booking {ref} is already cancelled. Tell them, and offer to book a new one."
+            return found
+
+        _, caller = _call_identity()
+        if not caller:
+            return (
+                "There is no caller number and no booking number, so there is "
+                "nothing to act on. Ask for the four digit booking number."
+            )
+
+        try:
+            found = await self.store.find_by_number(caller, tz=BUSINESS_TZ)
+        except Exception:
+            logger.exception("could not look up appointments for the caller")
+            return "The appointment book did not load. Offer to have the desk call back."
+
+        if not found:
+            return (
+                "Nothing is booked on this number. Say so gently and ask for the "
+                "four digit booking number."
+            )
+        if len(found) > 1:
+            today = datetime.now(BUSINESS_TZ).date()
+            options = "; ".join(
+                f"{item.booking_ref} at {speak_slot(item.starts_at(BUSINESS_TZ), today=today)}"
+                for item in found
+                if item.starts_at(BUSINESS_TZ)
+            )
+            return (
+                f"There is more than one: {options}. Ask which one they mean before "
+                "changing anything."
+            )
+        return found[0]
+
+
+def _no_store() -> str:
+    logger.error("appointment store is not configured")
+    return (
+        "The appointment system is not available. Do not pretend to book or "
+        "cancel anything. Apologise and say the desk will call them straight back."
+    )
+
+
+def _spoken_offers(slots: list[datetime], today: date) -> str:
+    return ", ".join(speak_slot(slot, today=today) for slot in slots)
+
+
+def _parse_date(value: str) -> date | None:
+    slot = _parse_slot(value, "00:00")
+    return slot.date() if slot else None
+
+
+def _parse_slot(day: str, at: str) -> datetime | None:
+    try:
+        return datetime.strptime(
+            f"{day.strip()} {at.strip()}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=BUSINESS_TZ)
+    except ValueError:
+        return None
 
 
 def _call_identity() -> tuple[str, str]:
     """Best-effort room name and caller number for the current call.
 
     The SDK exposes no constant for the SIP caller attribute, so rather than
-    hardcode a key that may not exist we scan the SIP participant's attributes
-    for anything phone-shaped and fall back to its identity (which for inbound
-    SIP encodes the number). Console and browser sessions have neither, and
-    return empty strings.
+    hardcode a key that may not exist we scan the participant's attributes for
+    anything phone-shaped and fall back to its identity. Outbound calls carry
+    the number in the job metadata instead, because we chose it.
     """
     ctx = get_job_context(required=False)
     if ctx is None:
         return "", ""
 
     room = getattr(ctx.room, "name", "") or ""
+
+    metadata = getattr(ctx.job, "metadata", "") or ""
+    if isinstance(metadata, str) and metadata:
+        try:
+            callee = json.loads(metadata).get("callee", "")
+            if callee:
+                return room, str(callee)
+        except (ValueError, AttributeError):
+            pass
 
     try:
         for participant in ctx.room.remote_participants.values():
