@@ -50,6 +50,9 @@ COLUMNS = [
     "created_utc",
     "cancelled_utc",
     "room",
+    # Every time this appointment has been moved, oldest first. A move rewrites
+    # slot_utc in place, so without this the original time is gone.
+    "history",
 ]
 
 STATUS_BOOKED = "booked"
@@ -65,6 +68,9 @@ REMINDER_SKIPPED = "skipped"
 # Digits only. A booking reference gets said out loud and heard back over a
 # phone line, where letters are what speech recognition gets wrong.
 REF_DIGITS = 4
+
+# A Sheets cell holds 50k characters; this keeps the column readable by eye.
+MAX_HISTORY_ENTRIES = 20
 
 
 class AppointmentError(RuntimeError):
@@ -93,6 +99,7 @@ class Appointment:
     created_utc: str = ""
     cancelled_utc: str = ""
     room: str = ""
+    history: str = ""
     # 0-based index in the sheet, header included. Absent for rows not read back.
     row_index: int | None = None
 
@@ -129,6 +136,7 @@ class Appointment:
             self.created_utc,
             self.cancelled_utc,
             self.room,
+            self.history,
         ]
 
     @classmethod
@@ -158,6 +166,7 @@ class Appointment:
             created_utc=values["created_utc"],
             cancelled_utc=values["cancelled_utc"],
             room=values["room"],
+            history=values["history"],
             row_index=row_index,
         )
 
@@ -198,6 +207,19 @@ class AppointmentStore:
             return
 
         header = [cell.strip().lower() for cell in rows[0]]
+        if len(header) < len(COLUMNS) and COLUMNS[: len(header)] == header:
+            # An older header that we have since added columns to. Extending it
+            # is safe because the existing columns are untouched and in the same
+            # order; refusing would stop a live sheet accepting bookings the
+            # moment a column is added, which is a worse failure than a widen.
+            logger.info(
+                "extending the header in '%s' from %d to %d columns",
+                self._tab, len(header), len(COLUMNS),
+            )
+            await self._client.write_row(self._tab, 0, COLUMNS)
+            self._header_checked = True
+            return
+
         if header[: len(COLUMNS)] != COLUMNS:
             raise SheetsError(
                 f"tab '{self._tab}' has an unexpected header. Expected {COLUMNS}, "
@@ -339,6 +361,73 @@ class AppointmentStore:
             logger.info("cancelled %s", booking_ref)
         return updated
 
+    async def reschedule(
+        self,
+        booking_ref: str,
+        *,
+        slot: datetime,
+        slot_local: str = "",
+        caller_timezone: str = "",
+        raw_request: str = "",
+    ) -> Appointment | None:
+        """Move an appointment to a new time, in place.
+
+        The row and the booking reference are the same afterwards. That is the
+        point: the number was read out to the caller and has to keep working.
+        Creating a replacement row instead left them holding a reference that
+        reads `cancelled`, and cost seven Sheets calls where this costs three.
+
+        Losing the race is handled the way `create` handles it, in reverse: the
+        write is atomic, then we re-read, and if someone else now holds the slot
+        we put the old time back. A caller keeping the appointment they already
+        had is the only acceptable outcome of a failed move.
+        """
+        existing = await self.all()
+        current = next((item for item in existing if item.booking_ref == booking_ref), None)
+        if current is None or not current.is_active:
+            return None
+
+        department = current.department.strip().lower()
+        slot_utc = slot.astimezone(UTC).isoformat(timespec="minutes")
+        if slot_utc == current.slot_utc:
+            return current
+        if _slot_holders(existing, department, slot_utc):
+            raise SlotTaken(f"{department} is already booked at {slot_utc}.")
+
+        was = current.slot_utc
+
+        def amend(item: Appointment) -> Appointment:
+            return replace(
+                item,
+                slot_utc=slot_utc,
+                slot_local=slot_local or item.slot_local,
+                caller_timezone=caller_timezone or item.caller_timezone,
+                raw_request=raw_request.strip() or item.raw_request,
+                # A move is a fresh commitment, so the reminder is owed again
+                # even if one already went out for the old time.
+                reminder_status=REMINDER_PENDING,
+                reminder_attempts=0,
+                reminder_last_utc="",
+                history=_append_history(item.history, was, slot_utc),
+            )
+
+        updated = await self._amend(booking_ref, amend)
+        if updated is None:
+            return None
+
+        holders = _slot_holders(await self.all(), department, slot_utc)
+        if len(holders) > 1:
+            winner = min(holders, key=lambda item: (item.created_utc, item.booking_ref))
+            if winner.booking_ref != booking_ref:
+                await self._amend(
+                    booking_ref,
+                    lambda item: replace(item, slot_utc=was, history=current.history),
+                )
+                raise SlotTaken(f"{department} was taken at {slot_utc} during the move.")
+
+        logger.info("moved %s from %s to %s", booking_ref, was, slot_utc)
+        return updated
+
     async def claim_reminder(self, booking_ref: str, *, max_attempts: int) -> Appointment | None:
         """Mark a reminder as being sent. Returns None if it is not ours to send.
 
@@ -412,6 +501,14 @@ class AppointmentStore:
 
 class _NotClaimable(Exception):
     pass
+
+
+def _append_history(existing: str, was: str, now: str) -> str:
+    """Append one move, oldest first, capped so a cell cannot grow forever."""
+    entry = f"{was}->{now}"
+    parts = [part for part in (existing or "").split("; ") if part.strip()]
+    parts.append(entry)
+    return "; ".join(parts[-MAX_HISTORY_ENTRIES:])
 
 
 def _slot_holders(

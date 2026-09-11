@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,7 @@ from voice_agent.business import load_profile
 from voice_agent.config import Settings
 from voice_agent.prompts import render_prompt
 from voice_agent.scheduling import hours_for, hours_on, nearest_slots
+from voice_agent.storage import SlotTaken
 from voice_agent.storage.appointments import COLUMNS, AppointmentStore
 
 UTC = ZoneInfo("UTC")
@@ -1130,3 +1132,174 @@ def test_nearest_slots_prefers_the_requested_time_over_the_start_of_the_day():
     assert picked == [grid[2], grid[3], grid[4]]
     # And they come back in time order, not in order of closeness.
     assert picked == sorted(picked)
+
+
+# --- Rescheduling moves the row it already has -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_move_keeps_one_row_and_the_same_booking_number(agent, sheet):
+    """Creating a replacement row left the caller holding a cancelled ref.
+
+    The number gets read out loud, so it has to keep working for the life of
+    the appointment. The row is amended in place; nothing is inserted.
+    """
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(next_open_slot(1))
+        )
+        ref = agent.last_booking.booking_ref
+
+        await agent.reschedule_appointment(None, **local(next_open_slot(2)))
+
+    rows = [row for row in await sheet.read_rows("appointments") if row and row[0].strip()]
+    assert len(rows) == 2, "header plus exactly one appointment"
+
+    found = await agent.store.find_by_ref(ref)
+    assert found is not None and found.is_active
+
+
+@pytest.mark.asyncio
+async def test_a_second_move_on_the_same_call_works(agent):
+    """It used to dead-end: last_booking still pointed at the cancelled row."""
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(next_open_slot(1))
+        )
+        ref = agent.last_booking.booking_ref
+
+        await agent.reschedule_appointment(None, **local(next_open_slot(2)))
+        third = next_open_slot(3)
+        result = await agent.reschedule_appointment(None, **local(third))
+
+    assert "no caller number and no booking number" not in result
+    assert "Moved" in result
+    found = await agent.store.find_by_ref(ref)
+    assert found.starts_at() == third
+
+
+@pytest.mark.asyncio
+async def test_a_move_records_where_it_came_from(agent):
+    first, second = next_open_slot(1), next_open_slot(2)
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(first)
+        )
+        ref = agent.last_booking.booking_ref
+        await agent.reschedule_appointment(None, **local(second))
+
+    found = await agent.store.find_by_ref(ref)
+    assert first.isoformat(timespec="minutes") in found.history
+    assert second.isoformat(timespec="minutes") in found.history
+
+
+@pytest.mark.asyncio
+async def test_a_move_puts_the_reminder_back_in_the_queue(agent):
+    """A new time is a new commitment, even if the old one was already rung."""
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(next_open_slot(1))
+        )
+        ref = agent.last_booking.booking_ref
+        await agent.store.claim_reminder(ref, max_attempts=3)
+        await agent.reschedule_appointment(None, **local(next_open_slot(2)))
+
+    found = await agent.store.find_by_ref(ref)
+    assert found.reminder_status == "pending"
+    assert found.reminder_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_losing_the_race_puts_the_original_time_back(agent, monkeypatch):
+    """In place means writing over the only row, so a lost race must restore."""
+    first, second = next_open_slot(1), next_open_slot(2)
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(first)
+        )
+    ref = agent.last_booking.booking_ref
+
+    # Someone else takes the target slot between our write and our re-read.
+    # reschedule reads three times: its own check, _amend's read, then the
+    # verify. Only the verify must see the interloper.
+    real_all = agent.store.all
+    state = {"calls": 0}
+
+    async def racing_all():
+        items = await real_all()
+        state["calls"] += 1
+        if state["calls"] >= 3:
+            items = [*items, replace(items[0], booking_ref="0001", slot_utc=second.isoformat(timespec="minutes"), created_utc="2000-01-01T00:00+00:00")]
+        return items
+
+    monkeypatch.setattr(agent.store, "all", racing_all)
+
+    with pytest.raises(SlotTaken):
+        await agent.store.reschedule(ref, slot=second)
+
+    monkeypatch.setattr(agent.store, "all", real_all)
+    found = await agent.store.find_by_ref(ref)
+    assert found.starts_at() == first, "the caller must keep the slot they had"
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_appointment_cannot_be_moved(agent):
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(next_open_slot(1))
+        )
+        ref = agent.last_booking.booking_ref
+        await agent.store.cancel(ref)
+
+    assert await agent.store.reschedule(ref, slot=next_open_slot(2)) is None
+
+
+@pytest.mark.asyncio
+async def test_an_older_header_is_widened_rather_than_refused(agent):
+    """Adding a column must not stop a live sheet accepting bookings."""
+    old_header = COLUMNS[:-1]
+    client = FakeSheetsClient([old_header])
+    store = AppointmentStore(client, tab="appointments")
+
+    await store.ensure_ready()
+
+    assert (await client.read_rows("appointments"))[0] == COLUMNS
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_wrong_header_is_still_refused(agent):
+    client = FakeSheetsClient([["name", "when", "notes"]])
+    store = AppointmentStore(client, tab="appointments")
+
+    with pytest.raises(Exception, match="unexpected header"):
+        await store.ensure_ready()
+
+
+def test_prompt_never_volunteers_cancelling_or_moving(rendered):
+    """The caller raises it. Mentioning it unprompted plants the idea."""
+    assert "Never offer to cancel or move anything" in rendered
+    assert 'do not ask "did you want to book, change or cancel?"' in rendered
+    assert "Would you like to book an appointment?" in rendered
+    assert "Bad: Would you like to book, change or cancel an appointment?" in rendered
+
+
+def test_prompt_does_not_pitch_a_rebook_after_a_cancellation(rendered):
+    assert "Do not pitch a new time" in rendered
+    assert "Bad: That's cancelled. Would you like to rebook for another day?" in rendered
+
+
+def test_the_reminder_call_may_still_ask_about_the_appointment(rendered):
+    """We rang them, so asking if they can make it is the point of the call."""
+    assert "ask if they can still make it" in rendered
+
+
+@pytest.mark.asyncio
+async def test_the_cancel_tool_does_not_ask_for_a_rebook(agent):
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(next_open_slot(1))
+        )
+        result = await agent.cancel_appointment(None)
+
+    assert "Do not offer them another time" in result
+    assert "offer once to book another time" not in result

@@ -40,6 +40,7 @@ from voice_agent.storage import (
     AppointmentStore,
     SlotTaken,
     build_store,
+    normalise_number,
 )
 from voice_agent.timezones import describe, resolve_timezone
 
@@ -817,8 +818,9 @@ class ReceptionistAgent(Agent):
         if self.cache:
             self.cache.invalidate()
         return (
-            f"Cancelled: {self._describe(target)}. Tell them it is cancelled, then "
-            "offer once to book another time. Do not end the call in this reply."
+            f"Cancelled: {self._describe(target)}. Tell them it is cancelled and "
+            "stop. Do not offer them another time: if they want one they will "
+            "ask. Do not end the call in this reply."
         )
 
     @function_tool
@@ -876,18 +878,13 @@ class ReceptionistAgent(Agent):
                 "Call check_availability and offer a time it gives you."
             )
 
-        # New booking first. If it fails, the original is untouched.
         try:
-            await self.store.create(
-                patient_name=target.patient_name,
-                patient_number=target.patient_number,
-                department=department.name,
+            moved = await self.store.reschedule(
+                target.booking_ref,
                 slot=slot,
                 slot_local=speak_slot(slot, tz=self.schedule.tz),
                 caller_timezone=str(tz),
-                reason=target.reason,
                 raw_request=raw_request or target.raw_request,
-                room=target.room,
             )
         except SlotTaken:
             self.cache.invalidate()
@@ -897,24 +894,24 @@ class ReceptionistAgent(Agent):
                 "what is free."
             )
         except Exception:
-            logger.exception("could not create the replacement appointment")
+            logger.exception("could not move %s", target.booking_ref)
             return (
                 "The move did NOT go through and the original appointment still "
                 "stands. Say the desk will call them back."
             )
 
-        try:
-            await self.store.cancel(target.booking_ref, reason="moved")
-        except Exception:
-            # The new one exists, so the patient has a slot. A duplicate is
-            # visible in the sheet and a human can clear it; losing the booking
-            # entirely would be worse.
-            logger.exception("moved but could not cancel %s", target.booking_ref)
+        if moved is None:
+            return (
+                f"Booking {target.booking_ref} is not open to be moved. Look it up "
+                "again and check which appointment they mean."
+            )
 
         self.cache.invalidate()
-        spoken = (raw_request or "").strip() or speak_slot(
-            slot, tz=tz, today=datetime.now(tz).date()
-        )
+        # The row is the same row, so what they are holding is this. Leaving the
+        # stale copy here meant a second change on the same call dead-ended,
+        # asking for a number the caller had already been given.
+        self.last_booking = moved
+        spoken = _confirmation_words(raw_request, slot, tz)
         return (
             f'Moved. Tell them it is now "{spoken}", in their own words. Their '
             f"booking number stays the same as far as they are concerned, so do "
@@ -985,7 +982,9 @@ class ReceptionistAgent(Agent):
         # A booking made earlier in this same call is what "no, I said six"
         # refers to. On a real call the agent asked the caller for the four
         # digit number it had read aloud to them thirty seconds before.
-        if self.last_booking is not None:
+        _, caller = _call_identity()
+
+        if self.last_booking is not None and _same_caller(self.last_booking, caller):
             # Re-read rather than trusting the snapshot taken at creation: it
             # still says active after the booking has been cancelled, which
             # would let a second cancel "succeed" against a dead row.
@@ -997,7 +996,6 @@ class ReceptionistAgent(Agent):
             if current is not None and current.is_active:
                 return current
 
-        _, caller = _call_identity()
         if not caller:
             return (
                 "There is no caller number and no booking number, so there is "
@@ -1087,6 +1085,17 @@ def _call_identity() -> tuple[str, str]:
         logger.debug("could not resolve caller identity", exc_info=True)
 
     return room, ""
+
+
+def _same_caller(appointment: Appointment, caller: str) -> bool:
+    """Whether the booking made on this call belongs to whoever is on the line.
+
+    Without the check, the shortcut to "the booking just made" would hand one
+    caller another caller's appointment whenever a worker is reused.
+    """
+    if not caller:
+        return True
+    return normalise_number(appointment.patient_number) == normalise_number(caller)
 
 
 def _confirmation_words(raw_request: str, slot: datetime, tz) -> str:
