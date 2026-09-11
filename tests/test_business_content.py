@@ -29,11 +29,50 @@ def test_faqs_load():
 
 def test_prompt_includes_the_faqs_and_leaves_no_placeholders(rendered):
     assert "{" not in rendered
-    assert "How much is the consultation?" in rendered
+    assert "What does a visit cost?" in rendered
     assert "Can I cancel or change my appointment?" in rendered
     # Facts come from the profile, not from prose in the prompt.
-    assert load_profile()["doctor_name"] in rendered
+    assert load_profile()["business_name"] in rendered
     assert load_profile()["address"] in rendered
+
+
+def test_every_department_reaches_the_prompt(rendered):
+    """The model cannot route to a department it was never told about."""
+    for name in load_profile().schedule.names:
+        assert name in rendered, name
+
+
+def test_every_department_keeps_real_office_hours(rendered):
+    """Round-the-clock outpatient clinics are not a thing in US healthcare.
+
+    Only the emergency room never closes, and it is not a bookable department.
+    """
+    for name, department in load_profile().schedule.departments.items():
+        assert not department.is_always_open, f"{name} is still open 24/7"
+        assert department.slot_minutes == 30, name
+        assert not department.weekly.get("sunday"), f"{name} opens on a Sunday"
+        for windows in department.weekly.values():
+            for opens, closes in windows:
+                assert opens.hour >= 7, (name, opens)
+                assert closes.hour <= 19, (name, closes)
+
+
+def test_the_hospital_runs_on_ohio_time():
+    """Columbus is Eastern. There is no Ohio-specific IANA zone."""
+    assert load_profile().schedule.timezone == "America/New_York"
+
+
+def test_the_emergency_room_is_still_always_open(rendered):
+    """The one thing that genuinely is 24/7, and the agent must not lose it."""
+    assert "twenty four hours a day" in load_profile()["emergency_room"]
+    assert "twenty four hours" in rendered
+
+
+def test_the_agent_is_told_not_to_recite_every_departments_hours(rendered):
+    """Ten sets of opening hours read aloud is unusable on a phone call."""
+    flat = " ".join(rendered.split())
+    assert "Never read that whole list out" in flat
+    assert "ask which department they need" in flat
 
 
 def test_content_has_no_dashes_or_markup(rendered):

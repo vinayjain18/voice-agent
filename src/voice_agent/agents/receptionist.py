@@ -1,4 +1,4 @@
-"""The clinic receptionist: answers questions and manages appointments."""
+"""The hospital receptionist: answers questions and manages appointments."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import re
 import time as clock
 from datetime import date, datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from livekit.agents import (
     Agent,
@@ -24,8 +23,11 @@ from voice_agent.business import BusinessProfile, load_profile
 from voice_agent.config import Settings
 from voice_agent.prompts import render_prompt
 from voice_agent.scheduling import (
+    UTC,
+    Department,
     Schedule,
     available_slots,
+    hours_for,
     next_available,
     render_hours,
     speak_slot,
@@ -36,10 +38,9 @@ from voice_agent.storage import (
     SlotTaken,
     build_store,
 )
+from voice_agent.timezones import describe, resolve_timezone
 
 logger = logging.getLogger(__name__)
-
-BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
 
 # Nothing is offered closer than this to now. A patient needs time to travel,
 # and a slot starting in four minutes helps nobody.
@@ -137,17 +138,24 @@ def build_prompt_variables(
     """Business facts plus the things only known at call time."""
     variables = profile.as_prompt_vars()
 
+    schedule = profile.schedule
+    # Say times back in the patient's own timezone when we recorded one, which
+    # is the whole point of storing it.
+    caller_tz = resolve_timezone(reminder_for.caller_timezone) if reminder_for else None
+    speak_tz = caller_tz or schedule.tz
+
     if reminder_for is not None:
-        starts = reminder_for.starts_at(BUSINESS_TZ)
+        starts = reminder_for.starts_at()
         when = (
-            speak_slot(starts, today=datetime.now(BUSINESS_TZ).date())
+            speak_slot(starts, tz=speak_tz, today=datetime.now(speak_tz).date())
             if starts
-            else f"{reminder_for.slot_date} at {reminder_for.slot_time}"
+            else reminder_for.slot_utc
         )
         variables["opening_instructions"] = REMINDER_OPENING.format(
             greeting=opening_line(profile, reminder=True),
             appointment=(
-                f"The appointment is {when}, booked under the name "
+                f"The appointment is {when} ({describe(speak_tz)}), in "
+                f"{reminder_for.department or 'the clinic'}, booked under the name "
                 f"{reminder_for.patient_name or 'unknown'}, booking number "
                 f"{reminder_for.booking_ref}."
             ),
@@ -160,9 +168,10 @@ def build_prompt_variables(
 
     # The model has no idea what today is. Without this it invents dates when a
     # caller says "next Tuesday", confidently and wrongly.
-    now = datetime.now(BUSINESS_TZ)
+    now = datetime.now(schedule.tz)
     variables["current_datetime"] = now.strftime("%A %d %B %Y, %I:%M %p")
     variables["current_date"] = now.strftime("%Y-%m-%d")
+    variables["current_utc"] = datetime.now(UTC).strftime("%A %d %B %Y, %H:%M UTC")
 
     # The language profile is the source of truth here, not profile.json,
     # because it is validated against the TTS at startup.
@@ -253,9 +262,13 @@ class AppointmentCache:
             self._loaded_at = clock.monotonic()
         return self._items
 
-    async def taken(self, *, force: bool = False) -> set[datetime]:
+    async def taken(self, department: str, *, force: bool = False) -> set[datetime]:
+        """Booked instants for one department. Departments never clash."""
+        wanted = (department or "").strip().lower()
         moments = (
-            item.starts_at(BUSINESS_TZ) for item in await self.items(force=force) if item.is_active
+            item.starts_at()
+            for item in await self.items(force=force)
+            if item.is_active and item.department.strip().lower() == wanted
         )
         return {moment for moment in moments if moment is not None}
 
@@ -280,6 +293,15 @@ class ReceptionistAgent(Agent):
         self.store = build_store(self.settings) if store is AUTO_STORE else store
         self.cache = AppointmentCache(self.store) if self.store else None
         self.reminder_for = reminder_for
+        # Remembered once the caller states a timezone, so later times in the
+        # same call are spoken back in theirs rather than the hospital's.
+        self.caller_tz = (
+            resolve_timezone(reminder_for.caller_timezone) if reminder_for else None
+        ) or self.schedule.tz
+        # Captured for the call log, which runs after the room is gone and can
+        # no longer ask the job context who was on the line.
+        self.caller_number = ""
+        self.last_booking: Appointment | None = None
         self._goodbye_instructions = (
             OUTBOUND_GOODBYE if self.outbound else INBOUND_GOODBYE
         )
@@ -305,41 +327,113 @@ class ReceptionistAgent(Agent):
             logger.info("ignoring a user turn with no speech in it: %r", text)
             raise StopResponse()
 
-    @function_tool
-    async def get_business_hours(self, context: RunContext) -> str:
-        """Return the clinic's consulting hours.
+    def _resolve_department(self, name: str) -> Department | str:
+        """The department the caller means, or what to ask them."""
+        department = self.schedule.department(name)
+        if department is not None:
+            return department
+        options = ", ".join(self.schedule.names)
+        if not (name or "").strip():
+            return (
+                f"No department was given. Ask what they need to be seen about, "
+                f"then pick from: {options}."
+            )
+        return (
+            f"'{name}' does not match a department. Do not guess. Ask what they "
+            f"need to be seen about and pick from: {options}."
+        )
 
-        Call this when the caller asks when the clinic is open.
+    def _resolve_timezone(self, spoken: str):
+        """The timezone to read the caller's time in, or what to ask them.
+
+        An unrecognised timezone is never assumed away. Booking someone into the
+        wrong offset is invisible until they fail to turn up.
         """
-        return render_hours(self.schedule)
+        if not (spoken or "").strip():
+            return self.caller_tz
+        tz = resolve_timezone(spoken)
+        if tz is None:
+            return (
+                f"'{spoken}' is not a timezone I can place. Do not guess and do "
+                f"not assume ours. Ask which city or country they are in, then "
+                f"call this again."
+            )
+        self.caller_tz = tz
+        return tz
+
+    def _offers(self, slots: list[datetime], tz) -> str:
+        today = datetime.now(tz).date()
+        return ", ".join(speak_slot(slot, tz=tz, today=today) for slot in slots)
 
     @function_tool
-    async def check_availability(self, context: RunContext, day: str = "") -> str:
-        """Find appointment times that are actually free.
+    async def get_business_hours(self, context: RunContext, department: str = "") -> str:
+        """Return opening hours.
+
+        Prefer passing a department. Reading all ten out loud is a wall of text
+        nobody can hold in their head.
+
+        Args:
+            department: Which department they asked about, if they named one or
+                you can tell from what they need. Leave empty only when they
+                genuinely asked about the hospital as a whole.
+        """
+        if (department or "").strip():
+            target = self._resolve_department(department)
+            if isinstance(target, str):
+                return target
+            return f"{hours_for(self.schedule, target)} {self.profile['emergency_room']}"
+        return (
+            f"{render_hours(self.schedule)} {self.profile['emergency_room']} "
+            "Do not read all of that out. Ask which department they need and give "
+            "just those hours."
+        )
+
+    @function_tool
+    async def check_availability(
+        self,
+        context: RunContext,
+        department: str,
+        day: str = "",
+        timezone: str = "",
+    ) -> str:
+        """Find appointment times that are actually free in a department.
 
         Call this BEFORE offering any time. Never invent a slot and never
         promise one you have not checked here first.
 
         Args:
-            day: The day to check, as YYYY-MM-DD. Work it out from today's date
-                in your instructions. Leave empty to get the soonest available
-                times on any day.
+            department: Which department they need, for example "dentistry",
+                "eye care" or "family medicine". Work it out from what they say
+                they need. Ask if it is not clear; do not guess.
+            day: The day to check, as YYYY-MM-DD in the caller's own timezone.
+                Leave empty for the soonest times on any day.
+            timezone: The caller's timezone, only if they have said one, for
+                example "IST", "Pacific time" or "South African time". Leave
+                empty to use the one already established on this call.
         """
         if self.cache is None:
             return _no_store()
 
+        target = self._resolve_department(department)
+        if isinstance(target, str):
+            return target
+
+        tz = self._resolve_timezone(timezone)
+        if isinstance(tz, str):
+            return tz
+
         try:
-            taken = await self.cache.taken()
+            taken = await self.cache.taken(target.name)
         except Exception:
             logger.exception("could not read availability")
             return (
-                "The diary did not load. Apologise, say you cannot see the "
+                "The schedule did not load. Apologise, say you cannot see the "
                 "appointment book right now, and offer to have the desk call "
                 "them straight back. Do not guess at any times."
             )
 
-        now = datetime.now(BUSINESS_TZ)
-        today = now.date()
+        now = datetime.now(UTC)
+        today = now.astimezone(tz).date()
 
         if day.strip():
             wanted = _parse_date(day)
@@ -355,14 +449,10 @@ class ReceptionistAgent(Agent):
                     f"We only book {self.schedule.booking_horizon_days} days ahead. "
                     "Tell them that warmly and offer something sooner."
                 )
-            if not self.schedule.is_open_on(wanted):
-                return (
-                    f"The clinic is closed on {wanted.strftime('%A %d %B')}. Say so "
-                    f"warmly, say when we are open, and offer the nearest day."
-                )
 
             free = available_slots(
                 self.schedule,
+                target,
                 wanted,
                 taken,
                 now=now,
@@ -371,56 +461,73 @@ class ReceptionistAgent(Agent):
             if not free:
                 fallback = next_available(
                     self.schedule,
+                    target,
                     taken,
                     now=now,
                     limit=MAX_OFFERS,
                     min_notice_minutes=MIN_NOTICE_MINUTES,
                 )
                 if not fallback:
-                    return "Nothing is free at all in the next few weeks. Offer to have the desk call them back."
-                offers = _spoken_offers(fallback, today)
+                    return (
+                        f"{target.name} has nothing free at all in the next few weeks. "
+                        "Offer to have the desk call them back."
+                    )
                 return (
-                    f"{wanted.strftime('%A %d %B')} is fully booked. Say so, then "
-                    f"offer these instead: {offers}. Offer them, do not list them all."
+                    f"{target.name} is full on {wanted.strftime('%A %d %B')}. Say so, "
+                    f"then offer these instead: {self._offers(fallback, tz)}. Offer "
+                    "two of them, do not list them all."
                 )
-            offers = _spoken_offers(free[:MAX_OFFERS], today)
-            return f"Free on {wanted.strftime('%A %d %B')}: {offers}. Offer two of these, not all."
+            return (
+                f"{target.name} on {wanted.strftime('%A %d %B')}: "
+                f"{self._offers(free[:MAX_OFFERS], tz)}. Offer two of these, not all."
+            )
 
         soonest = next_available(
             self.schedule,
+            target,
             taken,
             now=now,
             limit=MAX_OFFERS,
             min_notice_minutes=MIN_NOTICE_MINUTES,
         )
         if not soonest:
-            return "Nothing is free in the next few weeks. Offer to have the desk call them back."
-        return f"Soonest free: {_spoken_offers(soonest, today)}. Offer two of these, not all."
+            return (
+                f"{target.name} has nothing free in the next few weeks. Offer to "
+                "have the desk call them back."
+            )
+        return (
+            f"Soonest free in {target.name}: {self._offers(soonest, tz)}. "
+            "Offer two of these, not all."
+        )
 
     @function_tool
     async def book_appointment(
         self,
         context: RunContext,
         name: str,
+        department: str,
         date: str,
         time: str,
+        timezone: str = "",
         reason: str = "",
         raw_request: str = "",
     ) -> str:
-        """Book an appointment at a specific date and time.
+        """Book an appointment in a department at a specific date and time.
 
-        Call this once you have the caller's name, a day AND a time, and only
-        after check_availability confirmed that time is free.
+        Call this once you have the caller's name, the department, a day AND a
+        time, and only after check_availability confirmed that time is free.
 
         Never ask for a phone number or an email. We already have the caller's
         number from the call itself and it is recorded automatically.
 
         Args:
             name: The patient's name.
-            date: The date as YYYY-MM-DD. Work it out from today's date given in
-                your instructions - never guess the year.
-            time: 24-hour HH:MM in India time, e.g. "17:30". Required. If the
-                caller has only given a day, ask what time suits them first.
+            department: Which department, for example "dentistry" or "eye care".
+            date: The date as YYYY-MM-DD, in the caller's own timezone.
+            time: 24-hour HH:MM in the caller's own timezone, e.g. "17:30".
+            timezone: The caller's timezone if they stated one, for example
+                "IST" or "Pacific time". Leave empty to use the one already
+                established on this call. Never guess one.
             reason: One short line on what they need to be seen about. Never a
                 diagnosis, just what they told you.
             raw_request: What the caller actually said about timing, e.g.
@@ -437,26 +544,38 @@ class ReceptionistAgent(Agent):
                 "them, then call this tool again."
             )
 
-        slot = _parse_slot(date, time)
+        target = self._resolve_department(department)
+        if isinstance(target, str):
+            return target
+
+        tz = self._resolve_timezone(timezone)
+        if isinstance(tz, str):
+            return tz
+
+        slot = _parse_slot(date, time, tz)
         if slot is None:
             return f"'{date} {time}' is not a date and time. Work them out and call this again."
 
-        now = datetime.now(BUSINESS_TZ)
+        now = datetime.now(UTC)
         if slot <= now:
             return "That time has already passed. Do not book it. Offer the next free slot instead."
-        if not self.schedule.is_valid_slot(slot):
+        if not self.schedule.is_valid_slot(target, slot):
             return (
-                f"{time} is not one of our appointment times. Call check_availability "
-                "and offer a time it gives you."
+                f"{time} is not one of the appointment times in {target.name}. Call "
+                "check_availability and offer a time it gives you."
             )
 
         room_name, caller = _call_identity()
+        self.caller_number = caller or self.caller_number
 
         try:
             appointment = await self.store.create(
                 patient_name=name,
                 patient_number=caller,
+                department=target.name,
                 slot=slot,
+                slot_local=speak_slot(slot, tz=self.schedule.tz),
+                caller_timezone=str(tz),
                 reason=reason,
                 raw_request=raw_request,
                 room=room_name,
@@ -476,14 +595,18 @@ class ReceptionistAgent(Agent):
             )
 
         self.cache.invalidate()
-        spoken = (raw_request or "").strip() or speak_slot(slot, today=now.date())
+        self.last_booking = appointment
+        spoken = (raw_request or "").strip() or speak_slot(
+            slot, tz=tz, today=datetime.now(tz).date()
+        )
         digits = " ".join(appointment.booking_ref)
         return (
-            f"Saved. Now say it back to them out loud using THEIR OWN words: "
-            f'"{spoken}". Do not convert it and do not name a weekday if they said '
-            f"today or tomorrow. Then read the booking number once, slowly, as "
-            f"digits: {digits}. Tell them they can use that or just this phone "
-            f"number to change it. Then stop and wait. Do not end the call in this reply."
+            f"Saved with {target.name}. Now say it back to them out loud using "
+            f'THEIR OWN words: "{spoken}". Do not convert it to another timezone '
+            f"and do not name a weekday if they said today or tomorrow. Then read "
+            f"the booking number once, slowly, as digits: {digits}. Tell them they "
+            f"can use that or just this phone number to change it. Then stop and "
+            f"wait. Do not end the call in this reply."
         )
 
     @function_tool
@@ -504,7 +627,7 @@ class ReceptionistAgent(Agent):
             )
 
         try:
-            found = await self.store.find_by_number(caller, tz=BUSINESS_TZ)
+            found = await self.store.find_by_number(caller)
         except Exception:
             logger.exception("could not look up appointments")
             return "The appointment book did not load. Apologise and offer to have the desk call back."
@@ -515,19 +638,18 @@ class ReceptionistAgent(Agent):
                 "four digit booking number, or offer to book them in."
             )
 
-        today = datetime.now(BUSINESS_TZ).date()
-        lines = [
-            f"{item.booking_ref}: {speak_slot(item.starts_at(BUSINESS_TZ), today=today)}"
-            f" for {item.patient_name}"
-            for item in found
-            if item.starts_at(BUSINESS_TZ)
-        ]
+        lines = [self._describe(item) for item in found if item.starts_at()]
         if len(lines) == 1:
             return f"One appointment: {lines[0]}. Say it back and ask if that is the one."
         return (
             f"{len(lines)} appointments: {'; '.join(lines)}. Ask which one they mean "
             "before doing anything."
         )
+
+    def _describe(self, item: Appointment) -> str:
+        tz = resolve_timezone(item.caller_timezone) or self.caller_tz
+        when = speak_slot(item.starts_at(), tz=tz, today=datetime.now(tz).date())
+        return f"{item.booking_ref}: {item.department} {when} for {item.patient_name}"
 
     @function_tool
     async def cancel_appointment(self, context: RunContext, booking_ref: str = "") -> str:
@@ -560,10 +682,8 @@ class ReceptionistAgent(Agent):
 
         if self.cache:
             self.cache.invalidate()
-        today = datetime.now(BUSINESS_TZ).date()
-        when = speak_slot(target.starts_at(BUSINESS_TZ), today=today)
         return (
-            f"Cancelled the appointment for {when}. Tell them it is cancelled, then "
+            f"Cancelled: {self._describe(target)}. Tell them it is cancelled, then "
             "offer once to book another time. Do not end the call in this reply."
         )
 
@@ -573,17 +693,20 @@ class ReceptionistAgent(Agent):
         context: RunContext,
         date: str,
         time: str,
+        timezone: str = "",
         booking_ref: str = "",
         raw_request: str = "",
     ) -> str:
-        """Move an appointment to a new date and time.
+        """Move an appointment to a new date and time, same department.
 
         Use this rather than cancelling and booking again: if the new time turns
         out to be gone, the caller keeps the appointment they already had.
 
         Args:
-            date: The new date as YYYY-MM-DD.
-            time: The new time as 24-hour HH:MM in India time.
+            date: The new date as YYYY-MM-DD in the caller's own timezone.
+            time: The new time as 24-hour HH:MM in the caller's own timezone.
+            timezone: The caller's timezone if they stated one. Leave empty to
+                use the one already established on this call.
             booking_ref: The four digit booking number, if they gave you one.
                 Leave empty to use the appointment on the number they called from.
             raw_request: What they actually said about the new timing.
@@ -595,25 +718,39 @@ class ReceptionistAgent(Agent):
         if isinstance(target, str):
             return target
 
-        slot = _parse_slot(date, time)
+        department = self.schedule.department(target.department)
+        if department is None:
+            return (
+                f"Booking {target.booking_ref} is in '{target.department}', which is "
+                "no longer a department here. Say the desk will call them back."
+            )
+
+        tz = self._resolve_timezone(timezone)
+        if isinstance(tz, str):
+            return tz
+
+        slot = _parse_slot(date, time, tz)
         if slot is None:
             return f"'{date} {time}' is not a date and time. Work them out and call this again."
 
-        now = datetime.now(BUSINESS_TZ)
+        now = datetime.now(UTC)
         if slot <= now:
             return "That time has already passed. Offer a later one."
-        if not self.schedule.is_valid_slot(slot):
+        if not self.schedule.is_valid_slot(department, slot):
             return (
-                f"{time} is not one of our appointment times. Call check_availability "
-                "and offer a time it gives you."
+                f"{time} is not one of the appointment times in {department.name}. "
+                "Call check_availability and offer a time it gives you."
             )
 
         # New booking first. If it fails, the original is untouched.
         try:
-            moved = await self.store.create(
+            await self.store.create(
                 patient_name=target.patient_name,
                 patient_number=target.patient_number,
+                department=department.name,
                 slot=slot,
+                slot_local=speak_slot(slot, tz=self.schedule.tz),
+                caller_timezone=str(tz),
                 reason=target.reason,
                 raw_request=raw_request or target.raw_request,
                 room=target.room,
@@ -633,15 +770,17 @@ class ReceptionistAgent(Agent):
             )
 
         try:
-            await self.store.cancel(target.booking_ref, reason=f"moved to {moved.booking_ref}")
+            await self.store.cancel(target.booking_ref, reason="moved")
         except Exception:
             # The new one exists, so the patient has a slot. A duplicate is
             # visible in the sheet and a human can clear it; losing the booking
             # entirely would be worse.
-            logger.exception("moved to %s but could not cancel %s", moved.booking_ref, target.booking_ref)
+            logger.exception("moved but could not cancel %s", target.booking_ref)
 
         self.cache.invalidate()
-        spoken = (raw_request or "").strip() or speak_slot(slot, today=now.date())
+        spoken = (raw_request or "").strip() or speak_slot(
+            slot, tz=tz, today=datetime.now(tz).date()
+        )
         return (
             f'Moved. Tell them it is now "{spoken}", in their own words. Their '
             f"booking number stays the same as far as they are concerned, so do "
@@ -717,7 +856,7 @@ class ReceptionistAgent(Agent):
             )
 
         try:
-            found = await self.store.find_by_number(caller, tz=BUSINESS_TZ)
+            found = await self.store.find_by_number(caller)
         except Exception:
             logger.exception("could not look up appointments for the caller")
             return "The appointment book did not load. Offer to have the desk call back."
@@ -728,12 +867,7 @@ class ReceptionistAgent(Agent):
                 "four digit booking number."
             )
         if len(found) > 1:
-            today = datetime.now(BUSINESS_TZ).date()
-            options = "; ".join(
-                f"{item.booking_ref} at {speak_slot(item.starts_at(BUSINESS_TZ), today=today)}"
-                for item in found
-                if item.starts_at(BUSINESS_TZ)
-            )
+            options = "; ".join(self._describe(item) for item in found if item.starts_at())
             return (
                 f"There is more than one: {options}. Ask which one they mean before "
                 "changing anything."
@@ -749,20 +883,21 @@ def _no_store() -> str:
     )
 
 
-def _spoken_offers(slots: list[datetime], today: date) -> str:
-    return ", ".join(speak_slot(slot, today=today) for slot in slots)
-
-
 def _parse_date(value: str) -> date | None:
-    slot = _parse_slot(value, "00:00")
-    return slot.date() if slot else None
-
-
-def _parse_slot(day: str, at: str) -> datetime | None:
     try:
-        return datetime.strptime(
-            f"{day.strip()} {at.strip()}", "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=BUSINESS_TZ)
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()  # noqa: DTZ007
+    except ValueError:
+        return None
+
+
+def _parse_slot(day: str, at: str, tz) -> datetime | None:
+    """Read a wall-clock date and time as being in `tz`, and return it in UTC."""
+    try:
+        return (
+            datetime.strptime(f"{day.strip()} {at.strip()}", "%Y-%m-%d %H:%M")
+            .replace(tzinfo=tz)
+            .astimezone(UTC)
+        )
     except ValueError:
         return None
 

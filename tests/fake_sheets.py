@@ -30,3 +30,6 @@ class FakeSheetsClient:
 
     async def tab_id(self, tab: str) -> int:
         return 0
+
+    async def ensure_tab(self, tab: str) -> None:
+        return None

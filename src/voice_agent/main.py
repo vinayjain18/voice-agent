@@ -32,9 +32,11 @@ from voice_agent.observability import (
     attach_metrics_logging,
     log_session_summary,
 )
+from voice_agent.observability.summary import infer_outcome, summarise_call
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
 from voice_agent.storage import build_store, save_transcript
+from voice_agent.storage.calls import CallLog, build_record
 from voice_agent.whatsapp.disconnect import (
     disconnect_whatsapp_call,
     find_whatsapp_call_id,
@@ -213,6 +215,20 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             logger.debug("could not delete room %s", ctx.room.name, exc_info=True)
 
+        # Last, with the caller already gone: write one line saying why they
+        # rang. This makes an LLM call, so it must stay after the teardown
+        # rather than in front of it.
+        await _log_call(
+            settings,
+            session=session,
+            agent=agent,
+            store=store,
+            outbound=outbound,
+            duration=duration,
+            cost=cost,
+            room=ctx.room.name,
+        )
+
     ctx.add_shutdown_callback(_on_shutdown)
 
     # Speak the opening verbatim instead of asking the model to compose one.
@@ -259,3 +275,42 @@ async def _warm(cache) -> None:
     except Exception:
         # A cold cache is not fatal: the tool re-reads and reports its own error.
         logger.warning("could not prefetch the appointment diary", exc_info=True)
+
+
+async def _log_call(
+    settings,
+    *,
+    session,
+    agent,
+    store,
+    outbound: bool,
+    duration: float,
+    cost,
+    room: str,
+) -> None:
+    """Record one line saying why this person rang.
+
+    Runs after the call has been torn down, so the LLM round trip it makes
+    cannot delay a hangup. Never raises: a missing log entry is a nuisance, an
+    exception here would mark the whole job as failed.
+    """
+    if store is None:
+        return
+    try:
+        summary = await summarise_call(session, session.llm)
+        booking = agent.last_booking
+        record = build_record(
+            direction="outbound" if outbound else "inbound",
+            caller_number=agent.caller_number,
+            duration_seconds=duration,
+            summary=summary,
+            outcome=infer_outcome(session.history),
+            department=booking.department if booking else "",
+            booking_ref=booking.booking_ref if booking else "",
+            turns=len(getattr(session.history, "items", []) or []),
+            cost_usd=cost.total_usd if cost else None,
+            room=room,
+        )
+        await CallLog(store.client, tab=settings.sheets.calls_tab).append(record)
+    except Exception:
+        logger.warning("could not log the call summary", exc_info=True)

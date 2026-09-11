@@ -127,6 +127,7 @@ class SheetsClient:
         if tab in self._tab_ids:
             return self._tab_ids[tab]
 
+        self._tab_ids.clear()
         data = await self._request(
             "GET",
             f"{API_ROOT}/{self.spreadsheet_id}",
@@ -140,6 +141,25 @@ class SheetsClient:
             available = ", ".join(sorted(self._tab_ids)) or "none"
             raise SheetsError(f"the spreadsheet has no tab named '{tab}'. Tabs: {available}.")
         return self._tab_ids[tab]
+
+    async def ensure_tab(self, tab: str) -> None:
+        """Create the tab if the spreadsheet does not have one.
+
+        Creating an empty tab cannot lose anything, and the alternative is a
+        call log that silently fails on every call because nobody added a tab by
+        hand. A tab that already has the wrong header is still refused by the
+        caller; this only handles the absent case.
+        """
+        try:
+            await self.tab_id(tab)
+            return
+        except SheetsError:
+            pass
+
+        logger.info("creating missing tab %r", tab)
+        await self.batch_update([{"addSheet": {"properties": {"title": tab}}}])
+        self._tab_ids.pop(tab, None)
+        await self.tab_id(tab)
 
     async def read_rows(self, tab: str) -> list[list[str]]:
         """Every row of the tab, as displayed.

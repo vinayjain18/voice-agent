@@ -23,7 +23,6 @@ import logging
 import secrets
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from voice_agent.storage.sheets import SheetsClient, SheetsError
 
@@ -34,8 +33,14 @@ COLUMNS = [
     "status",
     "patient_name",
     "patient_number",
-    "slot_date",
-    "slot_time",
+    "department",
+    # The canonical time. Everything compares on this.
+    "slot_utc",
+    # The same instant in the hospital's own timezone, for whoever reads the
+    # sheet. Derived, never read back by the code.
+    "slot_local",
+    # What the caller said their timezone was, so a human can see it.
+    "caller_timezone",
     "reason",
     "raw_request",
     "reminder_status",
@@ -75,8 +80,10 @@ class Appointment:
     status: str
     patient_name: str
     patient_number: str
-    slot_date: str
-    slot_time: str
+    department: str
+    slot_utc: str
+    slot_local: str = ""
+    caller_timezone: str = ""
     reason: str = ""
     raw_request: str = ""
     reminder_status: str = REMINDER_PENDING
@@ -92,19 +99,15 @@ class Appointment:
     def is_active(self) -> bool:
         return self.status == STATUS_BOOKED
 
-    def starts_at(self, tz: ZoneInfo) -> datetime | None:
-        try:
-            moment = datetime.strptime(
-                f"{self.slot_date} {self.slot_time}", "%Y-%m-%d %H:%M"
-            ).replace(tzinfo=tz)
-        except ValueError:
+    def starts_at(self) -> datetime | None:
+        """The appointment as a UTC instant, or None if the cell is unreadable."""
+        moment = _parse_utc(self.slot_utc)
+        if moment is None:
             logger.warning(
-                "appointment %s has an unreadable slot: %r %r",
+                "appointment %s has an unreadable slot_utc: %r",
                 self.booking_ref,
-                self.slot_date,
-                self.slot_time,
+                self.slot_utc,
             )
-            return None
         return moment
 
     def to_row(self) -> list[str]:
@@ -113,8 +116,10 @@ class Appointment:
             self.status,
             self.patient_name,
             self.patient_number,
-            self.slot_date,
-            self.slot_time,
+            self.department,
+            self.slot_utc,
+            self.slot_local,
+            self.caller_timezone,
             self.reason,
             self.raw_request,
             self.reminder_status,
@@ -140,8 +145,10 @@ class Appointment:
             status=(values["status"] or STATUS_BOOKED).lower(),
             patient_name=values["patient_name"],
             patient_number=values["patient_number"],
-            slot_date=values["slot_date"],
-            slot_time=values["slot_time"],
+            department=values["department"],
+            slot_utc=values["slot_utc"],
+            slot_local=values["slot_local"],
+            caller_timezone=values["caller_timezone"],
             reason=values["reason"],
             raw_request=values["raw_request"],
             reminder_status=(values["reminder_status"] or REMINDER_PENDING).lower(),
@@ -172,11 +179,17 @@ class AppointmentStore:
         self._tab = tab
         self._header_checked = False
 
+    @property
+    def client(self) -> SheetsClient:
+        """Shared so the call log can reuse the same authenticated session."""
+        return self._client
+
     async def ensure_ready(self) -> None:
         """Create the header if the tab is empty; never touch existing rows."""
         if self._header_checked:
             return
 
+        await self._client.ensure_tab(self._tab)
         rows = await self._client.read_rows(self._tab)
         if not rows:
             await self._client.insert_row(self._tab, COLUMNS, at=0)
@@ -218,23 +231,29 @@ class AppointmentStore:
     async def active(self) -> list[Appointment]:
         return [item for item in await self.all() if item.is_active]
 
-    async def taken_slots(self, tz: ZoneInfo) -> set[datetime]:
-        moments = (item.starts_at(tz) for item in await self.active())
+    async def taken_slots(self, department: str) -> set[datetime]:
+        """Booked instants for one department. Other departments do not clash."""
+        wanted = (department or "").strip().lower()
+        moments = (
+            item.starts_at()
+            for item in await self.active()
+            if item.department.strip().lower() == wanted
+        )
         return {moment for moment in moments if moment is not None}
 
-    async def find_by_number(self, number: str, *, tz: ZoneInfo) -> list[Appointment]:
+    async def find_by_number(self, number: str) -> list[Appointment]:
         """Active future appointments for a caller, soonest first."""
         wanted = normalise_number(number)
         if not wanted:
             return []
-        now = datetime.now(tz)
+        now = datetime.now(UTC)
         matches = [
             item
             for item in await self.active()
             if normalise_number(item.patient_number) == wanted
-            and (item.starts_at(tz) or now) >= now
+            and (item.starts_at() or now) >= now
         ]
-        return sorted(matches, key=lambda item: (item.slot_date, item.slot_time))
+        return sorted(matches, key=lambda item: item.starts_at() or now)
 
     async def find_by_ref(self, booking_ref: str) -> Appointment | None:
         wanted = (booking_ref or "").strip()
@@ -250,7 +269,10 @@ class AppointmentStore:
         *,
         patient_name: str,
         patient_number: str,
+        department: str,
         slot: datetime,
+        slot_local: str = "",
+        caller_timezone: str = "",
         reason: str = "",
         raw_request: str = "",
         room: str = "",
@@ -262,19 +284,21 @@ class AppointmentStore:
         bookings landed on the same slot, the later `created_utc` stands down.
         """
         existing, row_count = await self._snapshot()
-        slot_date = slot.strftime("%Y-%m-%d")
-        slot_time = slot.strftime("%H:%M")
+        department = department.strip().lower()
+        slot_utc = slot.astimezone(UTC).isoformat(timespec="minutes")
 
-        if _slot_holders(existing, slot_date, slot_time):
-            raise SlotTaken(f"{slot_date} {slot_time} is already booked.")
+        if _slot_holders(existing, department, slot_utc):
+            raise SlotTaken(f"{department} is already booked at {slot_utc}.")
 
         appointment = Appointment(
             booking_ref=_new_ref({item.booking_ref for item in existing if item.is_active}),
             status=STATUS_BOOKED,
             patient_name=patient_name.strip(),
             patient_number=patient_number.strip(),
-            slot_date=slot_date,
-            slot_time=slot_time,
+            department=department,
+            slot_utc=slot_utc,
+            slot_local=slot_local,
+            caller_timezone=caller_timezone,
             reason=reason.strip(),
             raw_request=raw_request.strip(),
             reminder_status=REMINDER_PENDING,
@@ -283,19 +307,19 @@ class AppointmentStore:
         )
         await self._client.insert_row(self._tab, appointment.to_row(), at=row_count)
 
-        holders = _slot_holders(await self.all(), slot_date, slot_time)
+        holders = _slot_holders(await self.all(), department, slot_utc)
         if len(holders) > 1:
             winner = min(holders, key=lambda item: (item.created_utc, item.booking_ref))
             if winner.booking_ref != appointment.booking_ref:
                 await self.cancel(appointment.booking_ref, reason="double booking")
-                raise SlotTaken(f"{slot_date} {slot_time} was taken during booking.")
+                raise SlotTaken(f"{department} was taken at {slot_utc} during booking.")
 
         logger.info(
-            "booked %s for %s at %s %s",
+            "booked %s for %s, %s at %s",
             appointment.booking_ref,
             appointment.patient_name or "(no name)",
-            slot_date,
-            slot_time,
+            department,
+            slot_utc,
         )
         return appointment
 
@@ -389,11 +413,21 @@ class _NotClaimable(Exception):
     pass
 
 
-def _slot_holders(appointments: list[Appointment], slot_date: str, slot_time: str) -> list[Appointment]:
+def _slot_holders(
+    appointments: list[Appointment], department: str, slot_utc: str
+) -> list[Appointment]:
+    """Active bookings for one department at one instant.
+
+    Compared as instants rather than strings so "+00:00" and "Z" agree.
+    """
+    target = _parse_utc(slot_utc)
     return [
         item
         for item in appointments
-        if item.is_active and item.slot_date == slot_date and item.slot_time == slot_time
+        if item.is_active
+        and item.department.strip().lower() == department
+        and target is not None
+        and item.starts_at() == target
     ]
 
 
@@ -410,7 +444,6 @@ def due_for_reminder(
     appointments: list[Appointment],
     *,
     now: datetime,
-    tz: ZoneInfo,
     lead_minutes: int,
     tolerance_minutes: int,
     max_attempts: int,
@@ -418,19 +451,21 @@ def due_for_reminder(
 ) -> list[Appointment]:
     """Appointments whose reminder should go out now.
 
+    Entirely in UTC, so it does not care where the patient or the hospital is.
     Pure, so the whole selection rule is testable without a network. A row stuck
     in `sending` past the claim timeout is included again: that is a process
     that died mid-call, and the patient still has not been reminded.
     """
-    target = now.astimezone(tz) + timedelta(minutes=lead_minutes)
+    moment = now.astimezone(UTC)
+    target = moment + timedelta(minutes=lead_minutes)
     window = timedelta(minutes=tolerance_minutes)
-    stale_before = now.astimezone(tz) - timedelta(minutes=claim_timeout_minutes)
+    stale_before = moment - timedelta(minutes=claim_timeout_minutes)
 
     due = []
     for item in appointments:
         if not item.is_active or item.reminder_attempts >= max_attempts:
             continue
-        starts = item.starts_at(tz)
+        starts = item.starts_at()
         if starts is None or not (target - window <= starts <= target + window):
             continue
 
@@ -438,14 +473,15 @@ def due_for_reminder(
             due.append(item)
         elif item.reminder_status == REMINDER_SENDING:
             claimed_at = _parse_utc(item.reminder_last_utc)
-            if claimed_at is None or claimed_at.astimezone(tz) < stale_before:
+            if claimed_at is None or claimed_at < stale_before:
                 due.append(item)
 
-    return sorted(due, key=lambda item: (item.slot_date, item.slot_time))
+    return sorted(due, key=lambda item: item.starts_at() or moment)
 
 
 def _parse_utc(value: str) -> datetime | None:
     try:
-        return datetime.fromisoformat(value)
-    except (TypeError, ValueError):
+        moment = datetime.fromisoformat((value or "").strip())
+    except (AttributeError, TypeError, ValueError):
         return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)

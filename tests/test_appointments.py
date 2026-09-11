@@ -23,7 +23,9 @@ from voice_agent.storage.appointments import (
 )
 from voice_agent.storage.sheets import SheetsError
 
+UTC_TZ = ZoneInfo("UTC")
 IST = ZoneInfo("Asia/Kolkata")
+DEPT = "dentistry"
 
 
 def store(rows: list[list[str]] | None = None) -> tuple[AppointmentStore, FakeSheetsClient]:
@@ -36,8 +38,8 @@ def row_for(
     *,
     status: str = "booked",
     number: str = "+919876543210",
-    day: str = "2026-09-14",
-    at: str = "16:00",
+    slot: str = "2026-09-14T16:00+00:00",
+    department: str = DEPT,
     reminder: str = REMINDER_PENDING,
     attempts: int = 0,
     reminder_last: str = "",
@@ -47,8 +49,8 @@ def row_for(
         status=status,
         patient_name="Asha",
         patient_number=number,
-        slot_date=day,
-        slot_time=at,
+        department=department,
+        slot_utc=slot,
         reminder_status=reminder,
         reminder_attempts=attempts,
         reminder_last_utc=reminder_last,
@@ -90,7 +92,8 @@ async def test_create_inserts_below_the_header_and_returns_a_reference():
     made = await appointments.create(
         patient_name="Asha",
         patient_number="+919876543210",
-        slot=datetime(2026, 9, 14, 16, 0, tzinfo=IST),
+        department=DEPT,
+        slot=datetime(2026, 9, 14, 16, 0, tzinfo=UTC_TZ),
         reason="fever",
         raw_request="Monday evening",
     )
@@ -98,33 +101,35 @@ async def test_create_inserts_below_the_header_and_returns_a_reference():
     assert made.booking_ref.isdigit() and len(made.booking_ref) == 4
     assert client.rows[0] == COLUMNS
     assert client.rows[1][0] == made.booking_ref
-    assert made.slot_date == "2026-09-14" and made.slot_time == "16:00"
+    assert made.starts_at() == datetime(2026, 9, 14, 16, 0, tzinfo=UTC_TZ)
     assert made.reminder_status == REMINDER_PENDING
 
 
 async def test_create_refuses_a_slot_that_is_already_booked():
-    appointments, _ = store([list(COLUMNS), row_for("1234", day="2026-09-14", at="16:00")])
+    appointments, _ = store([list(COLUMNS), row_for("1234")])
 
     with pytest.raises(SlotTaken):
         await appointments.create(
             patient_name="Ravi",
             patient_number="+919000000000",
-            slot=datetime(2026, 9, 14, 16, 0, tzinfo=IST),
+            department=DEPT,
+            slot=datetime(2026, 9, 14, 16, 0, tzinfo=UTC_TZ),
         )
 
 
 async def test_a_cancelled_booking_frees_its_slot():
     appointments, _ = store(
-        [list(COLUMNS), row_for("1234", status=STATUS_CANCELLED, day="2026-09-14", at="16:00")]
+        [list(COLUMNS), row_for("1234", status=STATUS_CANCELLED)]
     )
 
     made = await appointments.create(
         patient_name="Ravi",
         patient_number="+919000000000",
-        slot=datetime(2026, 9, 14, 16, 0, tzinfo=IST),
+        department=DEPT,
+        slot=datetime(2026, 9, 14, 16, 0, tzinfo=UTC_TZ),
     )
 
-    assert made.slot_time == "16:00"
+    assert made.starts_at() == datetime(2026, 9, 14, 16, 0, tzinfo=UTC_TZ)
 
 
 async def test_a_simultaneous_booking_for_one_slot_leaves_a_single_winner():
@@ -140,18 +145,19 @@ async def test_a_simultaneous_booking_for_one_slot_leaves_a_single_winner():
             if not self.raced:
                 self.raced = True
                 # A rival booked the same slot a moment earlier.
-                rival = row_for("9999", day="2026-09-14", at="16:00")
+                rival = row_for("9999")
                 rival[COLUMNS.index("created_utc")] = "2026-09-10T08:00:00+00:00"
                 await super().insert_row(tab, rival, at=1)
 
     client = RacingClient([list(COLUMNS)])
     appointments = AppointmentStore(client, tab="appointments")
 
-    with pytest.raises(SlotTaken, match="taken during booking"):
+    with pytest.raises(SlotTaken, match="during booking"):
         await appointments.create(
             patient_name="Ravi",
             patient_number="+919000000000",
-            slot=datetime(2026, 9, 14, 16, 0, tzinfo=IST),
+            department=DEPT,
+            slot=datetime(2026, 9, 14, 16, 0, tzinfo=UTC_TZ),
         )
 
     live = [item for item in await appointments.all() if item.is_active]
@@ -178,11 +184,11 @@ async def test_cancelling_an_unknown_reference_is_not_an_error():
 
 async def test_find_by_number_ignores_formatting_differences():
     appointments, _ = store(
-        [list(COLUMNS), row_for("1234", number="+919876543210", day="2026-09-14")]
+        [list(COLUMNS), row_for("1234", number="+919876543210", slot="2099-01-01T10:00+00:00")]
     )
 
     for spelling in ("9876543210", "+91 98765 43210", "919876543210"):
-        found = await appointments.find_by_number(spelling, tz=IST)
+        found = await appointments.find_by_number(spelling)
         assert [item.booking_ref for item in found] == ["1234"], spelling
 
 
@@ -190,13 +196,13 @@ async def test_find_by_number_skips_cancelled_and_past_appointments():
     appointments, _ = store(
         [
             list(COLUMNS),
-            row_for("1111", day="2020-01-01"),
-            row_for("2222", status=STATUS_CANCELLED, day="2099-01-01"),
-            row_for("3333", day="2099-01-01"),
+            row_for("1111", slot="2020-01-01T10:00+00:00"),
+            row_for("2222", status=STATUS_CANCELLED, slot="2099-01-01T10:00+00:00"),
+            row_for("3333", slot="2099-01-01T10:00+00:00"),
         ]
     )
 
-    found = await appointments.find_by_number("+919876543210", tz=IST)
+    found = await appointments.find_by_number("+919876543210")
 
     assert [item.booking_ref for item in found] == ["3333"]
 
@@ -233,13 +239,14 @@ async def test_new_bookings_are_appended_so_existing_rows_never_move():
     the top, every index below would shift and that write would land on somebody
     else's appointment and destroy it. Appending keeps indices stable.
     """
-    appointments, client = store([list(COLUMNS), row_for("1111", day="2026-09-14", at="16:00")])
+    appointments, client = store([list(COLUMNS), row_for("1111")])
     before = client.rows[1]
 
     await appointments.create(
         patient_name="Ravi",
         patient_number="+919000000000",
-        slot=datetime(2026, 9, 15, 10, 0, tzinfo=IST),
+        department=DEPT,
+        slot=datetime(2026, 9, 15, 10, 0, tzinfo=UTC_TZ),
     )
 
     assert client.rows[1] == before, "an existing row moved"
@@ -259,10 +266,10 @@ async def test_a_concurrent_booking_does_not_corrupt_an_amendment():
             if not self.interfered:
                 self.interfered = True
                 # Someone else books while we are mid-amendment.
-                self.rows.append(row_for("2222", day="2026-09-20", at="11:00"))
+                self.rows.append(row_for("2222", slot="2026-09-20T11:00+00:00"))
             return rows
 
-    client = BusyClient([list(COLUMNS), row_for("1111", day="2026-09-14", at="16:00")])
+    client = BusyClient([list(COLUMNS), row_for("1111")])
     appointments = AppointmentStore(client, tab="appointments")
 
     await appointments.cancel("1111")
@@ -274,7 +281,7 @@ async def test_a_concurrent_booking_does_not_corrupt_an_amendment():
 
 async def test_a_duplicated_reference_is_refused_rather_than_guessed_at():
     """Two rows with one reference means a human edited the sheet."""
-    appointments, _ = store([list(COLUMNS), row_for("1111"), row_for("1111", at="17:00")])
+    appointments, _ = store([list(COLUMNS), row_for("1111"), row_for("1111", slot="2026-09-14T17:00+00:00")])
 
     with pytest.raises(AppointmentError, match="appears on 2 rows"):
         await appointments.cancel("1111")
@@ -290,7 +297,7 @@ async def test_amend_retries_when_a_new_booking_shifts_the_row():
             await super().write_row(tab, row_index, values)
             if not self.shifted:
                 self.shifted = True
-                self.rows.insert(1, row_for("5555", day="2026-10-01"))
+                self.rows.insert(1, row_for("5555", slot="2026-10-01T11:00+00:00"))
 
     client = ShiftingClient([list(COLUMNS), row_for("1234")])
     appointments = AppointmentStore(client, tab="appointments")
@@ -303,7 +310,7 @@ async def test_amend_retries_when_a_new_booking_shifts_the_row():
 
 
 async def test_rows_with_missing_trailing_cells_still_parse():
-    appointments, _ = store([list(COLUMNS), ["1234", "booked", "Asha", "+919876543210", "2026-09-14", "16:00"]])
+    appointments, _ = store([list(COLUMNS), ["1234", "booked", "Asha", "+919876543210", DEPT, "2026-09-14T16:00+00:00"]])
 
     found = await appointments.find_by_ref("1234")
 
@@ -320,14 +327,14 @@ def test_normalise_number_keeps_the_last_ten_digits():
 
 
 def make(ref: str, *, minutes_ahead: int, now: datetime, **kwargs) -> Appointment:
-    slot = now.astimezone(IST) + timedelta(minutes=minutes_ahead)
+    slot = now.astimezone(UTC_TZ) + timedelta(minutes=minutes_ahead)
     return Appointment(
         booking_ref=ref,
         status=kwargs.pop("status", "booked"),
         patient_name="Asha",
         patient_number="+919876543210",
-        slot_date=slot.strftime("%Y-%m-%d"),
-        slot_time=slot.strftime("%H:%M"),
+        department=DEPT,
+        slot_utc=slot.isoformat(timespec="minutes"),
         **kwargs,
     )
 
@@ -342,7 +349,7 @@ WINDOW = {
 
 
 def due(items: list[Appointment]) -> list[str]:
-    return [item.booking_ref for item in due_for_reminder(items, now=NOW, tz=IST, **WINDOW)]
+    return [item.booking_ref for item in due_for_reminder(items, now=NOW, **WINDOW)]
 
 
 def test_due_selects_only_appointments_inside_the_lead_window():
@@ -421,7 +428,7 @@ def test_an_unreadable_slot_is_skipped_rather_than_crashing_the_scan():
         status="booked",
         patient_name="Asha",
         patient_number="+919876543210",
-        slot_date="14/09/2026",
-        slot_time="4pm",
+        department=DEPT,
+        slot_utc="next Tuesday at four",
     )
     assert due([broken]) == []

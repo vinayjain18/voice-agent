@@ -1,8 +1,11 @@
 # Voice Agent
 
-A low-latency voice agent that answers a clinic's phone, holds a real
-conversation with a patient, books them a real appointment slot, and rings them
-back shortly before it.
+A low-latency voice agent that answers a hospital's phone, holds a real
+conversation with a patient, routes them to the right department, books a real
+appointment slot, and rings them back shortly before it.
+
+Patients can call from any timezone and say the time in their own: appointments
+are stored in UTC and converted for them.
 
 The same code runs four ways with no changes: **your terminal**, **a browser**,
 **a real phone number**, and **WhatsApp**.
@@ -70,7 +73,7 @@ environment variable. Every provider is swappable the same way.
 - **Costs are itemised** per call: tokens, characters, audio seconds, and a total.
 - **Everything the agent says is data**, not code. Facts live in JSON, behaviour
   lives in a Markdown prompt.
-- **275 tests**, none of which touch the network, so the suite runs in about a
+- **358 tests**, none of which touch the network, so the suite runs in about a
   second.
 
 ---
@@ -626,13 +629,31 @@ GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
 
 ### What the sheet holds
 
-One row per appointment, newest first:
+Two tabs, both created automatically if they are missing.
+
+**`appointments`**, one row per appointment:
 
 ```
-booking_ref  status  patient_name  patient_number  slot_date  slot_time
+booking_ref  status  patient_name  patient_number  department
+slot_utc  slot_local  caller_timezone
 reason  raw_request  reminder_status  reminder_attempts  reminder_last_utc
 created_utc  cancelled_utc  room
 ```
+
+`slot_utc` is the only column the code compares on. `slot_local` is the same
+instant in the hospital's timezone for whoever reads the sheet, and
+`caller_timezone` records what the patient was working from.
+
+**`calls`**, one row per call, including the ones that book nothing:
+
+```
+call_utc  direction  caller_number  duration_seconds  outcome
+department  booking_ref  summary  turns  cost_usd  room
+```
+
+`summary` is one sentence saying why they rang, written after the call ends so
+it cannot delay a hangup. Most calls are not bookings, and those are exactly the
+ones that otherwise vanish without a trace.
 
 Staff can cancel by editing `status` to `cancelled`; the agent picks that up on
 the next call and frees the slot. Nothing here ever clears a range, so a redeploy
@@ -643,25 +664,34 @@ cannot erase existing rows.
 > India's DPDP Act. Use a Google Workspace account rather than consumer Gmail,
 > share it only with named people, and turn link sharing off.
 
-### Consulting hours and slots
+### Departments and slots
 
-The bookable grid is derived from `schedule` in
+Each department has its own diary, so dentistry and eye care can both hold two
+o'clock. The grid comes from `schedule` in
 `src/voice_agent/business/profile.json`:
 
 ```json
 "schedule": {
-  "timezone": "Asia/Kolkata",
-  "slot_minutes": 15,
-  "booking_horizon_days": 30,
-  "weekly": {
-    "monday": [["10:00", "13:00"], ["17:00", "20:00"]],
-    "sunday": []
+  "timezone": "America/New_York",
+  "booking_horizon_days": 60,
+  "departments": {
+    "dentistry": { "slot_minutes": 30 },
+    "eye care": {
+      "slot_minutes": 30,
+      "weekly": { "monday": [["09:00", "17:00"]], "sunday": [] }
+    }
   }
 }
 ```
 
-The same object produces the spoken "we're open ..." line, so the hours the agent
-quotes and the slots it will actually offer cannot drift apart.
+A department with **no `weekly` block is open around the clock**, which is how
+every department ships by default. Give one a `weekly` block and it keeps real
+office hours instead, written in the hospital's timezone.
+
+`department_aliases` in the same file maps what callers actually say ("eye
+doctor", "my knee", "obgyn") to a department. The same object produces the
+spoken "we're open ..." line, so what the agent quotes and what it will book
+cannot drift apart.
 
 ---
 
@@ -840,10 +870,12 @@ voice-agent/
 │   │   └── faq.json             Spoken question and answer pairs
 │   ├── providers/               The only place models are constructed
 │   │   ├── stt.py  llm.py  tts.py  vad.py
-│   ├── scheduling.py            Slot grid and spoken opening hours
+│   ├── scheduling.py            Departments, slot grid, spoken hours
+│   ├── timezones.py             "South African time" -> ZoneInfo
 │   ├── storage/
 │   │   ├── sheets.py            Minimal async Google Sheets client
 │   │   ├── appointments.py      The appointment store
+│   │   ├── calls.py             One row per call, for the admin
 │   │   └── transcripts.py       Per-call JSON
 │   ├── reminders/
 │   │   ├── channels.py          How a reminder is delivered
@@ -851,6 +883,7 @@ voice-agent/
 │   ├── observability/
 │   │   ├── conversation.py      The conversation log
 │   │   ├── metrics.py           Per-turn latency
+│   │   ├── summary.py           One line saying why they rang
 │   │   └── usage.py             Cost summary
 │   └── whatsapp/                Webhook for local development
 ├── deploy/
@@ -861,7 +894,7 @@ voice-agent/
 ├── scripts/
 │   ├── make_call.py             Place an outbound call
 │   └── sync_webhook_bundle.py   Refresh the Vercel copy
-├── tests/                       275 tests, no network calls
+├── tests/                       358 tests, no network calls
 └── .env.example                 Every setting, documented
 ```
 
@@ -878,7 +911,7 @@ touching `storage/` or `reminders/`. A test enforces each of the three.
 
 ```bash
 uv sync                  # install
-uv run pytest            # 275 tests, about six seconds, no network calls
+uv run pytest            # 358 tests, about seven seconds, no network calls
 uv run ruff check .      # lint
 ```
 

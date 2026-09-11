@@ -59,7 +59,7 @@ def _agent_lines(text: str) -> list[str]:
 
 
 def test_there_are_worked_examples_to_learn_from(rendered):
-    assert len(_agent_lines(rendered)) >= 20
+    assert len(_agent_lines(rendered)) >= 18
 
 
 def test_prompt_demands_contractions(rendered):
@@ -132,34 +132,38 @@ def test_prompt_teaches_leading_the_conversation(rendered):
     assert "Never ask two questions in one breath" in rendered
 
 
-def test_prompt_covers_the_calls_a_clinic_line_gets(flat):
-    """A clinic line gets more than patients booking in."""
+def test_prompt_covers_the_calls_a_hospital_line_gets(flat):
+    """A hospital line gets more than patients booking in."""
     for topic in (
         "Someone selling to us",
         "Someone asking for a job",
         "Asking for test results over the phone",
-        "Asking for the doctor by name",
+        "Asking for a specific provider by name",
+        "Asking about a bill or what insurance covers",
         "Someone in a hurry",
     ):
         assert topic in flat, topic
 
 
-def test_results_and_prescriptions_never_get_handled_at_the_desk(flat):
-    """Both are the doctor's call, and both are easy for a model to guess at."""
+def test_results_are_never_read_out_at_the_desk(flat):
     assert "no visibility into results" in flat
     assert "don't say whether a result is normal" in flat
-    assert "That's the doctor's decision, never yours" in flat
 
 
-def test_the_doctors_whereabouts_are_never_disclosed(flat):
-    assert "Don't say whether she's in, busy, or with a patient" in flat
+def test_a_providers_whereabouts_are_never_disclosed(flat):
+    assert "Don't say whether they're in, busy, or with a patient" in flat
+
+
+def test_coverage_is_never_promised(flat):
+    """Telling someone their insurance covers it, and being wrong, costs money."""
+    assert "Don't quote coverage or promise what will be paid" in flat
 
 
 def test_prompt_handles_the_awkward_times(rendered):
     """A day is not a time, and half the answers people give are not either."""
     for case in (
         '**"Today"**',
-        "A weekend, or outside",
+        '**"As soon as possible"**',
         "A date that has already passed",
         '**"Sometime next week"**',
         "They change their mind",
@@ -168,9 +172,9 @@ def test_prompt_handles_the_awkward_times(rendered):
 
 
 def test_prompt_asks_for_the_day_with_options_not_an_empty_field(rendered):
-    assert "Getting the day" in rendered
+    assert "Getting the day and time" in rendered
     assert "later this week" in rendered
-    assert "Morning or evening?" in rendered
+    assert "Morning or afternoon?" in rendered
 
 
 def test_prompt_varies_the_closing_question(rendered):

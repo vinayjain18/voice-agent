@@ -6,8 +6,12 @@ readme = "README.md"
 authors = [
     { name = "Vinay Jain", email = "vinayjain449@gmail.com" }
 ]
+# The LICENSE file stays in the repo, but is deliberately not referenced here.
+# LiveKit's builder copies only pyproject.toml, uv.lock and README.md into the
+# build stage, so a `license-files` glob pointing at LICENSE matches nothing
+# there and fails the build with "Invalid project metadata". The SPDX
+# expression alone still records the licence in the package metadata.
 license = "MIT"
-license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",

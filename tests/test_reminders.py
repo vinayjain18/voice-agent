@@ -48,15 +48,15 @@ IST = ZoneInfo("Asia/Kolkata")
 
 
 def due_at(minutes_ahead: int, **kwargs) -> Appointment:
-    """An appointment `minutes_ahead` from NOW, written in clinic time."""
-    slot = NOW.astimezone(IST) + timedelta(minutes=minutes_ahead)
+    """An appointment `minutes_ahead` from NOW, stored in UTC."""
+    slot = NOW + timedelta(minutes=minutes_ahead)
     return Appointment(
         booking_ref=kwargs.pop("booking_ref", "1234"),
         status=kwargs.pop("status", "booked"),
         patient_name="Asha",
         patient_number=kwargs.pop("patient_number", "+919876543210"),
-        slot_date=slot.strftime("%Y-%m-%d"),
-        slot_time=slot.strftime("%H:%M"),
+        department=kwargs.pop("department", "dentistry"),
+        slot_utc=slot.isoformat(timespec="minutes"),
         **kwargs,
     )
 
@@ -215,6 +215,24 @@ async def test_an_unreadable_sheet_does_not_raise(monkeypatch, wired):
     assert "could not read" in result.error
 
 
+async def test_the_dry_run_channel_actually_runs():
+    """It is the default, so a broken one breaks every reminder silently."""
+    channel = DryRunChannel(Settings.load())
+    assert await channel.send(due_at(30)) is True
+
+
+async def test_a_full_pass_works_through_the_real_default_channel(wired):
+    """End to end on the channel that actually ships, not a stub."""
+    sheet = sheet_with(due_at(30))
+    wired(sheet)
+
+    result = await run_once(Settings.load(), now=NOW)
+
+    assert result.channel == "dry_run"
+    assert result.sent == ["1234"]
+    assert dict(zip(COLUMNS, sheet.rows[1], strict=False))["reminder_status"] == "sent"
+
+
 def test_dry_run_is_the_default_channel():
     """A live channel needs a WhatsApp business number Meta will allow to dial."""
     assert isinstance(build_channel(Settings.load()), DryRunChannel)
@@ -255,8 +273,10 @@ def test_the_run_summary_is_json_serialisable():
     json.dumps(ReminderRun(scanned=1, due=1, sent=["1234"]).as_dict())
 
 
-def test_the_reminder_timezone_matches_the_business_profile():
-    """Slot times are written in clinic time; two sources would drift apart."""
-    from voice_agent.business import load_profile
+def test_reminders_need_no_timezone_at_all():
+    """Slots are stored in UTC, so the scan is timezone free by construction."""
+    import inspect
 
-    assert Settings.load().reminders.timezone == load_profile().schedule.timezone
+    from voice_agent.storage.appointments import due_for_reminder
+
+    assert "tz" not in inspect.signature(due_for_reminder).parameters

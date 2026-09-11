@@ -124,6 +124,7 @@ class SheetsSettings:
 
     spreadsheet_id: str | None = None
     tab: str = "appointments"
+    calls_tab: str = "calls"
     service_account_json: str | None = None
     # Days of appointments pulled into the session cache when a call connects.
     prefetch_days: int = 30
@@ -151,10 +152,7 @@ class ReminderSettings:
     # returned to the queue after this long, so a restart resumes it.
     claim_timeout_minutes: int = 10
     ringing_timeout_seconds: int = 30
-    destination_country: str = "IN"
-    # Slot times are stored in clinic-local time. This must match
-    # `schedule.timezone` in the business profile; a test pins that.
-    timezone: str = "Asia/Kolkata"
+    destination_country: str = "US"
 
 
 @dataclass(frozen=True)
@@ -416,6 +414,7 @@ class Settings:
             sheets=SheetsSettings(
                 spreadsheet_id=_env("APPOINTMENTS_SHEET_ID"),
                 tab=_env("APPOINTMENTS_SHEET_TAB", "appointments"),
+                calls_tab=_env("CALLS_SHEET_TAB", "calls"),
                 service_account_json=_service_account_json(),
                 prefetch_days=int(_env("APPOINTMENTS_PREFETCH_DAYS", "30")),
             ),
@@ -427,8 +426,7 @@ class Settings:
                 max_attempts=int(_env("REMINDER_MAX_ATTEMPTS", "2")),
                 claim_timeout_minutes=int(_env("REMINDER_CLAIM_TIMEOUT_MINUTES", "10")),
                 ringing_timeout_seconds=int(_env("REMINDER_RINGING_TIMEOUT_SECONDS", "30")),
-                destination_country=_env("REMINDER_DESTINATION_COUNTRY", "IN"),
-                timezone=_env("CLINIC_TIMEZONE", "Asia/Kolkata"),
+                destination_country=_env("REMINDER_DESTINATION_COUNTRY", "US"),
             ),
             livekit=_livekit_settings(),
             pipeline=PipelineSettings(

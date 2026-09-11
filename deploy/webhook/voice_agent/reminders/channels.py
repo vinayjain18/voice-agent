@@ -7,7 +7,7 @@ Nigeria: Meta excludes those from business-initiated calling, and the test
 number is a US one. Everything up to the dial is exercised either way, so
 switching REMINDER_CHANNEL is the only change needed once a number exists.
 
-Permission is not a problem for the normal case. A patient who rang the clinic
+Permission is not a problem for the normal case. A patient who rang the hospital
 to book has, by placing that call, granted temporary call permission for seven
 days, so an appointment booked within a week of the call is already covered.
 """
@@ -46,11 +46,11 @@ class DryRunChannel:
 
     async def send(self, appointment: Appointment) -> bool:
         logger.info(
-            "DRY RUN reminder: would call %s about %s on %s at %s (booking %s)",
+            "DRY RUN reminder: would call %s about %s for %s at %s UTC (booking %s)",
             appointment.patient_number or "(no number)",
             appointment.patient_name or "(no name)",
-            appointment.slot_date,
-            appointment.slot_time,
+            appointment.department or "(no department)",
+            appointment.slot_utc,
             appointment.booking_ref,
         )
         return True

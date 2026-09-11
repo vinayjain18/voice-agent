@@ -68,7 +68,7 @@ def test_prompt_reads_out_no_urls(monkeypatch):
 
 def test_prompt_raises_on_missing_variable():
     with pytest.raises(KeyError):
-        render_prompt("receptionist", {"agent_name": "Nova"})
+        render_prompt("receptionist", {"agent_name": "Emma"})
 
 
 def test_preflight_reports_missing_key_for_selected_provider(monkeypatch):

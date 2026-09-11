@@ -1,49 +1,57 @@
 {
-  "_comment": "DEMO CONTENT. Answers are written to be spoken aloud: short, contracted, no lists, no markup. These are quoted almost verbatim on a call, so they are held to the same voice rules as the prompt.",
+  "_comment": "DEMO CONTENT for a fictional hospital. Answers are written to be spoken aloud: short, contracted, no lists, no markup. These are quoted almost verbatim on a call, so they follow the same voice rules as the prompt.",
   "faqs": [
     {
-      "q": "What are your timings?",
-      "a": "Monday to Friday we're open ten to one in the morning, and five to eight in the evening. Saturday is ten to two. We're closed on Sunday."
+      "q": "What are your hours?",
+      "a": "The emergency room never closes. Our clinics are mostly Monday to Friday, eight to five, though some open earlier and dentistry and family medicine do Saturday mornings. Which department did you need?"
     },
     {
-      "q": "How much is the consultation?",
-      "a": "It's six hundred rupees for a consultation. If you're coming back for a follow-up within fifteen days, that's three hundred."
+      "q": "What does a visit cost?",
+      "a": "A standard office visit is a hundred and eighty dollars without insurance, and a specialist visit is two fifty. With insurance you'd usually just owe your copay."
     },
     {
-      "q": "Do you take insurance?",
-      "a": "We don't do cashless insurance here, but you'll get a proper receipt and prescription so you can claim it back yourself."
+      "q": "Do you take my insurance?",
+      "a": "We're in network with Aetna, Anthem Blue Cross Blue Shield, Cigna, UnitedHealthcare, Humana, Medical Mutual, Medicare and Ohio Medicaid. If yours isn't one of those I'd rather check than guess. Which plan are you on?"
     },
     {
-      "q": "Can I just walk in?",
-      "a": "You can, though you might be waiting a while. If you'd like I can book you a time now and you'll be seen straight away."
+      "q": "What departments do you have?",
+      "a": "Family medicine, dentistry, eye care, pediatrics, orthopedics, dermatology, cardiology, women's health, ear nose and throat, and physical therapy. Which one did you need?"
     },
     {
-      "q": "Which doctor will I see?",
-      "a": "You'll see Dr Meera Iyer. She's a general physician, MBBS and an MD in General Medicine, and she's been practising eighteen years."
+      "q": "Can I see a dentist here?",
+      "a": "Yes, we've got a dental department. Cleanings, fillings, toothache, crowns. Want me to find you a time?"
     },
     {
-      "q": "Where exactly are you?",
-      "a": "We're on the second floor of Sunder Chambers, on Lokhandwala Road in Andheri West. There's a lift, and the entrance is just past the chemist."
-    },
-    {
-      "q": "What should I bring?",
-      "a": "Any earlier prescriptions and test reports, and a list of whatever you're already taking. That's usually all she needs."
-    },
-    {
-      "q": "How long does an appointment take?",
-      "a": "Each slot is fifteen minutes. If it's a first visit or something complicated, do allow a bit longer."
-    },
-    {
-      "q": "Do you do blood tests?",
-      "a": "Yes, we do routine blood work at the clinic. Reports normally come back the next working day and the desk will message you."
+      "q": "Can I get my eyes checked?",
+      "a": "Yes, eye care handles exams, vision tests and prescriptions for glasses or contacts. Shall I book you in?"
     },
     {
       "q": "Do you see children?",
-      "a": "Yes, Dr Iyer sees children as well as adults. For anything under a year old, do mention it when you book."
+      "a": "We do, pediatrics covers birth right through to eighteen. For anything under a year old, do mention it when you book."
     },
     {
-      "q": "Can I get a repeat prescription without coming in?",
-      "a": "That's Dr Iyer's call rather than mine, so the safest thing is to book a short follow-up and she can sort it out then."
+      "q": "Can I just walk in?",
+      "a": "For the emergency room, yes, any time. For a clinic appointment you can walk in during opening hours but you might wait a while. Shall I book you a time?"
+    },
+    {
+      "q": "Where are you?",
+      "a": "We're at forty four hundred Ridgeway Boulevard in Columbus. There's parking on site and the main entrance is off Ridgeway."
+    },
+    {
+      "q": "What should I bring?",
+      "a": "A photo ID, your insurance card, a list of anything you're currently taking, and any records from another provider."
+    },
+    {
+      "q": "How early should I arrive?",
+      "a": "About fifteen minutes before, if it's your first visit. That way registration doesn't eat into your appointment."
+    },
+    {
+      "q": "Can I get a refill on my prescription?",
+      "a": "Refills have to come from your provider rather than the front desk, I'm afraid. I can get you booked in and they'll take care of it."
+    },
+    {
+      "q": "When will my test results be ready?",
+      "a": "They usually post to your patient portal within two business days, and your provider will reach out if anything needs discussing."
     },
     {
       "q": "Can I cancel or change my appointment?",
@@ -55,11 +63,15 @@
     },
     {
       "q": "Do you do home visits?",
-      "a": "Not at the moment, I'm afraid. Everything's at the clinic."
+      "a": "Not at the moment, I'm afraid. Everything's here at the medical center."
     },
     {
-      "q": "Do you have parking?",
-      "a": "There's paid parking in the building basement, and usually space on the road outside except at peak hours."
+      "q": "I'm not in the US, can you still book me?",
+      "a": "Absolutely. Just tell me the time that works for you and which timezone you're in, and I'll take care of the rest."
+    },
+    {
+      "q": "Will my insurance cover this visit?",
+      "a": "That depends on your specific plan and I wouldn't want to guess at it. Patient services can check your benefits properly, and the desk verifies before you're seen either way."
     }
   ]
 }

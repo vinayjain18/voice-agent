@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
 from voice_agent.config import Settings
 from voice_agent.reminders.channels import ReminderChannel, build_channel
@@ -72,12 +71,9 @@ async def run_once(
 
     result.scanned = len(appointments)
     moment = now or datetime.now(UTC)
-    tz = ZoneInfo(settings.reminders.timezone)
-
     due = due_for_reminder(
         appointments,
         now=moment,
-        tz=tz,
         lead_minutes=settings.reminders.lead_minutes,
         tolerance_minutes=settings.reminders.tolerance_minutes,
         max_attempts=settings.reminders.max_attempts,

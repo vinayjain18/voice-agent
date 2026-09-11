@@ -1,54 +1,220 @@
 {
-  "_comment": "DEMO CONTENT for a portfolio project. The clinic, the doctor and the patients are invented. Review and replace every line before this is used with real patients. Spoken fields use contractions on purpose: long forms are the clearest sign of a machine on a phone call.",
-  "_schedule_note": "`schedule` is the single source of truth for both the slot grid and the spoken opening hours. Change it here and the agent's answers and its bookings move together.",
-
-  "business_name": "Aarogya Family Clinic",
-  "agent_name": "Nova",
-  "industry": "family medicine clinic",
-  "location": "Andheri West, Mumbai",
-  "address": "Second floor, Sunder Chambers, Lokhandwala Road, Andheri West, Mumbai 400053",
-
-  "doctor_name": "Dr Meera Iyer",
-  "doctor_credentials": "MBBS, MD in General Medicine, with eighteen years in practice",
-  "speciality": "general physician",
-
+  "_comment": "DEMO CONTENT for a portfolio project. Cedar Hollow Medical Center is FICTIONAL, invented for this demo. It is not a real hospital and must not be presented as one. Replace every line before this is used with real patients.",
+  "_schedule_note": "`schedule` is the single source of truth for the slot grid and for the spoken hours. A department with no `weekly` block is open around the clock; every department here keeps outpatient office hours instead. The emergency room is not a bookable department.",
+  "_timezone_note": "schedule.timezone is the hospital's own timezone, used for rendering. Appointments are stored in UTC, and callers can give times in any timezone they like.",
+  "business_name": "Cedar Hollow Medical Center",
+  "agent_name": "Emma",
+  "industry": "multispecialty medical center",
+  "location": "Columbus, Ohio",
+  "address": "4400 Ridgeway Boulevard, Columbus, Ohio 43215",
+  "_hours_note": "Outpatient clinic hours, not the emergency room. The ER runs around the clock and is not bookable: see `emergency_room`. Sourced hours: dentistry 7:00-17:30 plus Saturdays (ADA), eye care 8:30-17:00 (ophthalmology), dermatology 8:00-17:00, orthopedics 8:00-16:30, pediatrics 7:00-18:00. The rest follow the common US outpatient pattern of early morning to late afternoon, Monday to Friday. Every department is 30 minute slots.",
   "schedule": {
-    "timezone": "Asia/Kolkata",
-    "slot_minutes": 15,
-    "booking_horizon_days": 30,
-    "weekly": {
-      "monday": [["10:00", "13:00"], ["17:00", "20:00"]],
-      "tuesday": [["10:00", "13:00"], ["17:00", "20:00"]],
-      "wednesday": [["10:00", "13:00"], ["17:00", "20:00"]],
-      "thursday": [["10:00", "13:00"], ["17:00", "20:00"]],
-      "friday": [["10:00", "13:00"], ["17:00", "20:00"]],
-      "saturday": [["10:00", "14:00"]],
-      "sunday": []
+    "timezone": "America/New_York",
+    "booking_horizon_days": 60,
+    "departments": {
+      "family medicine": {
+        "slot_minutes": 30,
+        "description": "checkups, colds and flu, everyday illness, ongoing conditions",
+        "weekly": {
+          "monday": [["07:00", "19:00"]],
+          "tuesday": [["07:00", "19:00"]],
+          "wednesday": [["07:00", "19:00"]],
+          "thursday": [["07:00", "19:00"]],
+          "friday": [["07:00", "19:00"]],
+          "saturday": [["08:00", "13:00"]],
+          "sunday": []
+        }
+      },
+      "dentistry": {
+        "slot_minutes": 30,
+        "description": "cleanings, fillings, toothache, crowns",
+        "weekly": {
+          "monday": [["07:00", "17:30"]],
+          "tuesday": [["07:00", "17:30"]],
+          "wednesday": [["07:00", "17:30"]],
+          "thursday": [["07:00", "17:30"]],
+          "friday": [["07:00", "17:30"]],
+          "saturday": [["08:00", "13:00"]],
+          "sunday": []
+        }
+      },
+      "eye care": {
+        "slot_minutes": 30,
+        "description": "eye exams, vision tests, glasses and contact lens prescriptions",
+        "weekly": {
+          "monday": [["08:30", "17:00"]],
+          "tuesday": [["08:30", "17:00"]],
+          "wednesday": [["08:30", "17:00"]],
+          "thursday": [["08:30", "17:00"]],
+          "friday": [["08:30", "17:00"]],
+          "saturday": [],
+          "sunday": []
+        }
+      },
+      "pediatrics": {
+        "slot_minutes": 30,
+        "description": "children from birth to eighteen",
+        "weekly": {
+          "monday": [["07:00", "18:00"]],
+          "tuesday": [["07:00", "18:00"]],
+          "wednesday": [["07:00", "18:00"]],
+          "thursday": [["07:00", "18:00"]],
+          "friday": [["07:00", "18:00"]],
+          "saturday": [["08:00", "12:00"]],
+          "sunday": []
+        }
+      },
+      "orthopedics": {
+        "slot_minutes": 30,
+        "description": "bones, joints, sports injuries, back and knee pain",
+        "weekly": {
+          "monday": [["08:00", "16:30"]],
+          "tuesday": [["08:00", "16:30"]],
+          "wednesday": [["08:00", "16:30"]],
+          "thursday": [["08:00", "16:30"]],
+          "friday": [["08:00", "16:30"]],
+          "saturday": [],
+          "sunday": []
+        }
+      },
+      "dermatology": {
+        "slot_minutes": 30,
+        "description": "skin, hair and nails, rashes, moles",
+        "weekly": {
+          "monday": [["08:00", "17:00"]],
+          "tuesday": [["08:00", "17:00"]],
+          "wednesday": [["08:00", "17:00"]],
+          "thursday": [["08:00", "17:00"]],
+          "friday": [["08:00", "17:00"]],
+          "saturday": [],
+          "sunday": []
+        }
+      },
+      "cardiology": {
+        "slot_minutes": 30,
+        "description": "heart checks, blood pressure, palpitations",
+        "weekly": {
+          "monday": [["08:00", "17:00"]],
+          "tuesday": [["08:00", "17:00"]],
+          "wednesday": [["08:00", "17:00"]],
+          "thursday": [["08:00", "17:00"]],
+          "friday": [["08:00", "17:00"]],
+          "saturday": [],
+          "sunday": []
+        }
+      },
+      "obstetrics and gynecology": {
+        "slot_minutes": 30,
+        "description": "women's health, pregnancy care, annual exams",
+        "weekly": {
+          "monday": [["08:00", "17:00"]],
+          "tuesday": [["08:00", "17:00"]],
+          "wednesday": [["08:00", "17:00"]],
+          "thursday": [["08:00", "17:00"]],
+          "friday": [["08:00", "17:00"]],
+          "saturday": [],
+          "sunday": []
+        }
+      },
+      "ear nose and throat": {
+        "slot_minutes": 30,
+        "description": "hearing, sinuses, sore throats, tonsils",
+        "weekly": {
+          "monday": [["08:00", "17:00"]],
+          "tuesday": [["08:00", "17:00"]],
+          "wednesday": [["08:00", "17:00"]],
+          "thursday": [["08:00", "17:00"]],
+          "friday": [["08:00", "17:00"]],
+          "saturday": [],
+          "sunday": []
+        }
+      },
+      "physical therapy": {
+        "slot_minutes": 30,
+        "description": "rehab after injury or surgery, mobility work",
+        "weekly": {
+          "monday": [["07:00", "18:00"]],
+          "tuesday": [["07:00", "18:00"]],
+          "wednesday": [["07:00", "18:00"]],
+          "thursday": [["07:00", "18:00"]],
+          "friday": [["07:00", "18:00"]],
+          "saturday": [],
+          "sunday": []
+        }
+      }
     }
   },
-
+  "_department_aliases": "Spoken names callers actually use, mapped to the department key above.",
+  "department_aliases": {
+    "dentist": "dentistry",
+    "dental": "dentistry",
+    "teeth": "dentistry",
+    "tooth": "dentistry",
+    "eye doctor": "eye care",
+    "optometrist": "eye care",
+    "ophthalmologist": "eye care",
+    "vision": "eye care",
+    "eyes": "eye care",
+    "family doctor": "family medicine",
+    "primary care": "family medicine",
+    "general practitioner": "family medicine",
+    "gp": "family medicine",
+    "physical": "family medicine",
+    "checkup": "family medicine",
+    "kids": "pediatrics",
+    "children": "pediatrics",
+    "child": "pediatrics",
+    "baby": "pediatrics",
+    "pediatrician": "pediatrics",
+    "bones": "orthopedics",
+    "knee": "orthopedics",
+    "back": "orthopedics",
+    "shoulder": "orthopedics",
+    "sports injury": "orthopedics",
+    "skin": "dermatology",
+    "rash": "dermatology",
+    "acne": "dermatology",
+    "mole": "dermatology",
+    "heart": "cardiology",
+    "blood pressure": "cardiology",
+    "cardiologist": "cardiology",
+    "obgyn": "obstetrics and gynecology",
+    "ob gyn": "obstetrics and gynecology",
+    "gynecologist": "obstetrics and gynecology",
+    "pregnancy": "obstetrics and gynecology",
+    "prenatal": "obstetrics and gynecology",
+    "ent": "ear nose and throat",
+    "hearing": "ear nose and throat",
+    "sinus": "ear nose and throat",
+    "throat": "ear nose and throat",
+    "pt": "physical therapy",
+    "rehab": "physical therapy",
+    "therapy": "physical therapy"
+  },
   "services": [
-    "General consultation for fever, infections, aches and everyday illness",
-    "Follow-up visits and review of ongoing treatment",
-    "Blood pressure, diabetes and thyroid monitoring",
-    "Health check-ups and routine blood tests",
-    "Vaccinations for adults and children",
-    "Dressings, injections and minor procedures"
+    "Family medicine for checkups, colds and flu, and ongoing conditions",
+    "Dentistry, eye care, dermatology and ear nose and throat",
+    "Pediatrics for children from birth to eighteen",
+    "Orthopedics, cardiology, women's health and physical therapy",
+    "Lab work, X-rays and imaging on site",
+    "A round the clock emergency room for anything urgent"
   ],
-
-  "consultation_fee": "The consultation is six hundred rupees. A follow-up within fifteen days is three hundred.",
-  "payment_methods": "We take cash, UPI and all the usual cards at the desk.",
-  "insurance": "We don't do cashless insurance at the clinic. We'll give you a proper receipt and prescription so you can claim it back yourself.",
-
-  "visit_advice": "It helps if you bring any earlier prescriptions, test reports and a list of anything you're already taking.",
-  "walk_in_policy": "We do keep a little room for walk-ins, but you might wait a while. An appointment is much quicker.",
-  "reports_policy": "Test reports usually come back the next working day, and the desk will message you when they're ready.",
-
-  "emergency_number": "108",
-  "escalation_contact": "the clinic desk",
-  "contact_email": "desk@aarogyaclinic.example",
-
-  "greeting_inbound": "Thanks for calling Aarogya Family Clinic. This is Nova. How can I help you?",
-  "greeting_outbound": "Hello, this is Nova calling from Aarogya Family Clinic. Is now an alright time?",
-  "greeting_reminder": "Hello, this is Nova from Aarogya Family Clinic, just calling about your appointment. Is now an alright time?"
+  "consultation_fee": "A standard office visit is one hundred and eighty dollars without insurance, and a specialist visit is two hundred and fifty. With insurance you'd usually just owe your copay.",
+  "payment_methods": "We take all major cards, cash, HSA and FSA cards, and we can set up a payment plan if you need one.",
+  "insurance": "We're in network with most major plans. If you give the front desk your member ID when you arrive they'll verify your benefits before you're seen.",
+  "_insurance_note": "accepted_plans is the ONLY list the agent may confirm from. Anything not on it gets 'I'd have to check' plus a handover, never a yes. Replace this list with the client's real contracted payers before go-live.",
+  "accepted_plans": "Aetna, Anthem Blue Cross Blue Shield, Cigna, UnitedHealthcare, Humana, Medical Mutual of Ohio, Medicare and Ohio Medicaid",
+  "insurance_unknown_plan": "We work with a lot of plans but I wouldn't want to promise yours without checking. Patient services can confirm it in a minute, or bring your card and the desk will verify before you're seen.",
+  "visit_advice": "Please bring a photo ID, your insurance card, a list of anything you're currently taking, and any records from another provider.",
+  "arrival_advice": "Come about fifteen minutes early if it's your first visit, so registration doesn't eat into your appointment.",
+  "walk_in_policy": "We do take walk-ins, though you may wait a while. An appointment is much quicker.",
+  "reports_policy": "Lab results usually post to your patient portal within two business days, and your provider will reach out if anything needs discussing.",
+  "cancellation_policy": "Just let us know at least twenty four hours ahead if you can't make it, so we can offer the slot to someone else.",
+  "emergency_number": "911",
+  "emergency_room": "Our emergency room is open twenty four hours a day, seven days a week, and you don't need an appointment for it.",
+  "escalation_contact": "our patient services team",
+  "contact_email": "frontdesk@cedarhollowmed.example",
+  "greeting_inbound": "Thank you for calling Cedar Hollow Medical Center. This is Emma. How can I help you today?",
+  "greeting_outbound": "Hi, this is Emma calling from Cedar Hollow Medical Center. Is now an okay time?",
+  "greeting_reminder": "Hi, this is Emma from Cedar Hollow Medical Center, just calling about your upcoming appointment. Is now an okay time?"
 }

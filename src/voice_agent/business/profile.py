@@ -27,8 +27,20 @@ class BusinessProfile:
 
     @property
     def schedule(self) -> Schedule:
-        """Consulting hours and slot length, as the slot grid needs them."""
-        return load_schedule(self.data.get("schedule") or {})
+        """Departments, their hours and their slot lengths."""
+        return load_schedule(
+            self.data.get("schedule") or {},
+            self.data.get("department_aliases") or {},
+        )
+
+    def department_block(self) -> str:
+        """The departments, one per line, for the prompt."""
+        lines = []
+        for name in self.schedule.names:
+            department = self.schedule.departments[name]
+            detail = f": {department.description}" if department.description else ""
+            lines.append(f"- {name}{detail}")
+        return "\n".join(lines)
 
     def as_prompt_vars(self) -> dict[str, str]:
         """Flatten to strings so the prompt template can interpolate them."""
@@ -47,7 +59,8 @@ class BusinessProfile:
 
         schedule = self.schedule
         out["hours"] = render_hours(schedule)
-        out["slot_minutes"] = str(schedule.slot_minutes)
+        out["departments"] = self.department_block()
+        out["hospital_timezone"] = schedule.timezone
         out["booking_horizon_days"] = str(schedule.booking_horizon_days)
         out["faqs"] = self.faq_block()
         return out
