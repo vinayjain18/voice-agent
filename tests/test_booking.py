@@ -1507,3 +1507,291 @@ async def test_a_merged_turn_advances_the_turn_counter_once(agent):
     await agent.on_user_turn_completed(turn_ctx, _caller_says("is that the last one?"))
 
     assert agent._turn == before + 1
+
+
+# ---------------------------------------------------------------------------
+# A stated timezone must not reinterpret the slots we offered
+# ---------------------------------------------------------------------------
+
+
+async def _caller_answers(agent, text: str = "yes, that one"):
+    """Advance a turn the way a real answer would, past the consent gate."""
+    from livekit.agents import ChatContext
+
+    await agent.on_user_turn_completed(ChatContext(), _caller_says(text))
+
+
+@pytest.mark.asyncio
+async def test_accepting_an_offered_slot_books_the_time_that_was_offered(agent, sheet):
+    """The caller says "IST" once and every later offer is read in IST.
+
+    Offers are always rendered in the clinic's zone, but an empty timezone fell
+    back to the caller's, which sticks for the rest of the call. A 2pm offer
+    accepted by a caller in Johannesburg saved as 8am here, six hours out, with
+    nothing to flag it.
+    """
+    slot = next_open_slot()
+    agent._resolve_timezone("South African time")  # what "I'm in Cape Town" does
+
+    await agent.check_availability(None, DEPARTMENT, day=local(slot)["date"])
+    await _caller_answers(agent)
+
+    with patch(IDENTITY, return_value=("room-1", "+27821234567")):
+        result = await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(slot)
+        )
+
+    assert "Saved" in result
+    saved = rows(sheet)
+    assert len(saved) == 1
+    assert datetime.fromisoformat(saved[0]["slot_utc"]) == slot
+
+
+@pytest.mark.asyncio
+async def test_a_time_they_name_in_their_own_zone_converts_when_they_say_the_zone(
+    agent, sheet
+):
+    """Naming the zone is how a caller asks for their own clock, and the prompt
+    tells the model to pass it through. That must keep working."""
+    slot = next_open_slot()
+    ist = slot.astimezone(ZoneInfo("Asia/Kolkata"))
+    agent._turn += 2
+
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        result = await agent.book_appointment(
+            None,
+            department=DEPARTMENT,
+            name="Asha",
+            date=ist.strftime("%Y-%m-%d"),
+            time=ist.strftime("%H:%M"),
+            timezone="IST",
+        )
+
+    assert "Saved" in result
+    assert datetime.fromisoformat(rows(sheet)[0]["slot_utc"]) == slot
+
+
+@pytest.mark.asyncio
+async def test_an_unoffered_time_from_a_caller_abroad_asks_whose_clock_it_is(
+    agent, sheet
+):
+    """Two clocks are in play and this time came from neither the grid nor a
+    stated zone. Guessing either way saves a wrong appointment silently, which
+    is the one outcome worth a question."""
+    slot = next_open_slot()
+    agent._resolve_timezone("South African time")
+    agent._turn += 2
+
+    with patch(IDENTITY, return_value=("room-1", "+27821234567")):
+        result = await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(slot)
+        )
+
+    assert "Do not save yet" in result
+    assert "our time" in result
+    assert rows(sheet) == []
+
+
+@pytest.mark.asyncio
+async def test_an_unoffered_time_books_normally_when_nobody_named_a_zone(agent, sheet):
+    """The ordinary call. One clock, no ambiguity, no extra question."""
+    slot = next_open_slot()
+    agent._turn += 2
+
+    with patch(IDENTITY, return_value=("room-1", "+15551234567")):
+        result = await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(slot)
+        )
+
+    assert "Saved" in result
+    assert datetime.fromisoformat(rows(sheet)[0]["slot_utc"]) == slot
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_timezone_beats_a_slot_we_happened_to_offer(agent, sheet):
+    """Naming a zone is a different request from taking what was offered."""
+    slot = next_open_slot()
+    await agent.check_availability(None, DEPARTMENT, day=local(slot)["date"])
+    await _caller_answers(agent)
+
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(slot), timezone="IST"
+        )
+
+    saved = rows(sheet)
+    if saved:
+        assert datetime.fromisoformat(saved[0]["slot_utc"]) != slot, (
+            "an explicit IST time was read as clinic time"
+        )
+
+
+@pytest.mark.asyncio
+async def test_rescheduling_onto_an_offered_slot_keeps_the_offered_time(agent, sheet):
+    first = next_open_slot()
+    second = next_open_slot(days_ahead=3)
+    agent._turn += 2
+
+    with patch(IDENTITY, return_value=("room-1", "+27821234567")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(first)
+        )
+        ref = rows(sheet)[0]["booking_ref"]
+        # Only now do they mention where they are, exactly as on the real call.
+        agent._resolve_timezone("South African time")
+        await agent.check_availability(None, DEPARTMENT, day=local(second)["date"])
+        await _caller_answers(agent)
+        await agent.reschedule_appointment(
+            None, booking_ref=ref, **local(second)
+        )
+
+    active = [row for row in rows(sheet) if row["status"] == "booked"]
+    assert len(active) == 1
+    assert datetime.fromisoformat(active[0]["slot_utc"]) == second
+
+
+def test_the_booking_tools_say_when_to_leave_the_timezone_empty():
+    """It used to read "use the one already established on this call", which is
+    what made a slot offered in our time get saved in the caller's."""
+    for name in ("book_appointment", "reschedule_appointment"):
+        doc = " ".join((getattr(ReceptionistAgent, name).__doc__ or "").split())
+        assert "everything you read out is in our own timezone" in doc, name
+        assert "use the one already established" not in doc, name
+
+
+# ---------------------------------------------------------------------------
+# Looking an appointment up by the number we asked them for
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_find_my_appointment_looks_up_a_booking_number(agent, sheet):
+    """The dead end from a real call: the tool told the agent to ask for the
+    four digit number, and then had nowhere to put it. The caller read 7937 out
+    four times and was told each time that it could not be found."""
+    slot = next_open_slot()
+    agent._turn += 2
+    with patch(IDENTITY, return_value=("room-1", "")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(slot)
+        )
+        ref = rows(sheet)[0]["booking_ref"]
+
+        result = await agent.find_my_appointment(None, booking_ref=ref)
+
+    assert ref in result
+    assert "Vinay" in result
+    assert DEPARTMENT in result
+    assert "no caller number" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_booking_number_missing_its_leading_zero_still_matches(agent, sheet):
+    """References are zero padded and find_by_ref is an exact string match, so
+    "forty two" would miss the booking stored as 0042. One in ten starts with a
+    zero, so this is not an edge case."""
+    slot = next_open_slot()
+    agent._turn += 2
+    with (
+        patch("voice_agent.storage.appointments._new_ref", return_value="0042"),
+        patch(IDENTITY, return_value=("room-1", "")),
+    ):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(slot)
+        )
+        assert rows(sheet)[0]["booking_ref"] == "0042"
+
+        result = await agent.find_my_appointment(None, booking_ref="42")
+
+    assert "0042" in result
+    assert "Vinay" in result
+
+
+@pytest.mark.asyncio
+async def test_a_booking_number_with_no_appointment_says_so(agent):
+    with patch(IDENTITY, return_value=("room-1", "")):
+        result = await agent.find_my_appointment(None, booking_ref="0000")
+
+    assert "No appointment has the number 0000" in result
+
+
+@pytest.mark.asyncio
+async def test_a_booking_number_that_is_not_digits_asks_them_to_say_it_again(agent):
+    """It must not quietly fall through to the caller-number lookup: that is
+    what produced "I'm not seeing that number on my end" for a number that was
+    never looked up at all."""
+    with patch(IDENTITY, return_value=("room-1", "")):
+        result = await agent.find_my_appointment(None, booking_ref="seven nine three")
+
+    assert "four digit" in result
+    assert "no caller number" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_booking_number_says_it_was_cancelled(agent, sheet):
+    slot = next_open_slot()
+    agent._turn += 2
+    with patch(IDENTITY, return_value=("room-1", "")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(slot)
+        )
+        ref = rows(sheet)[0]["booking_ref"]
+        await agent.cancel_appointment(None, booking_ref=ref)
+
+        result = await agent.find_my_appointment(None, booking_ref=ref)
+
+    assert "cancelled" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_with_an_unpadded_number_still_finds_it(agent, sheet):
+    """The same normalising has to reach the tools that act, not just the one
+    that reads."""
+    slot = next_open_slot()
+    agent._turn += 2
+    with (
+        patch("voice_agent.storage.appointments._new_ref", return_value="0042"),
+        patch(IDENTITY, return_value=("room-1", "")),
+    ):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Vinay", **local(slot)
+        )
+        result = await agent.cancel_appointment(None, booking_ref="42")
+
+    assert "Cancelled" in result
+    assert rows(sheet)[0]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_no_booking_number_still_looks_up_the_caller(agent, sheet):
+    """The existing path must not change for a caller we can identify."""
+    slot = next_open_slot()
+    agent._turn += 2
+    with patch(IDENTITY, return_value=("room-1", "+919876543210")):
+        await agent.book_appointment(
+            None, department=DEPARTMENT, name="Asha", **local(slot)
+        )
+        result = await agent.find_my_appointment(None)
+
+    assert "One appointment" in result
+    assert "Asha" in result
+
+
+@pytest.mark.asyncio
+async def test_no_booking_number_and_no_caller_number_still_asks_for_one(agent):
+    with patch(IDENTITY, return_value=("room-1", "")):
+        result = await agent.find_my_appointment(None)
+
+    assert "four digit booking number" in result
+
+
+def test_prompt_tells_the_model_to_pass_the_booking_number_to_the_tool(rendered):
+    """The rule the tool now supports. Without it the model asks for a number
+    and then looks the caller up by phone again, which is the loop a real call
+    went round four times."""
+    assert "pass it straight to find_my_appointment" in rendered
+
+
+def test_an_example_shows_a_number_being_looked_up(rendered):
+    """Constraint 21: a rule with no worked example is decoration."""
+    assert "seven nine three seven" in rendered

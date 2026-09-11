@@ -36,6 +36,7 @@ from voice_agent.scheduling import (
     speak_time,
 )
 from voice_agent.storage import (
+    REF_DIGITS,
     Appointment,
     AppointmentStore,
     SlotTaken,
@@ -483,6 +484,45 @@ class ReceptionistAgent(Agent):
             self._offered.setdefault(slot, self._turn)
         return ", ".join(speak_slot(slot, tz=tz, today=today) for slot in slots)
 
+    def _accepting_an_offer(self, date: str, time: str, timezone: str) -> datetime | None:
+        """The instant we actually offered, when this is the caller taking it.
+
+        `_offers` always renders slots in the clinic's zone, but an empty
+        `timezone` falls back to the caller's, and that sticks for the rest of
+        the call once they name one. So the two clocks disagree from the moment
+        a caller says where they are: the agent offers two o'clock our time and
+        the tool reads two o'clock theirs.
+
+        On a real call that made every eye care slot unbookable, because 9am
+        here read as 9am IST, which is the middle of the night here. With a
+        smaller offset it does not fail at all: a 2pm offer taken by a caller in
+        Johannesburg saved as 8am here, six hours out and silent.
+
+        A wall clock landing exactly on a slot we read out is them accepting
+        that slot. An explicit timezone always wins, because naming a time in
+        their own zone is a different request from taking what was offered.
+        """
+        if (timezone or "").strip():
+            return None
+        wanted = _parse_slot(date, time, self.schedule.tz)
+        if wanted is None or wanted not in self._offered:
+            return None
+        return wanted
+
+    def _two_clocks_in_play(self, timezone: str) -> bool:
+        """Whether a bare wall clock is genuinely ambiguous.
+
+        Only once the caller has named a zone, and only for a time that is not
+        one we offered. Everything spoken on this call is in our zone, so a
+        bare time is usually ours, but "usually" saves a wrong appointment
+        silently often enough to be worth a question. Everywhere else in here
+        an unplaceable timezone gets asked about rather than assumed; this is
+        the same rule.
+        """
+        if (timezone or "").strip():
+            return False
+        return str(self.caller_tz) != str(self.schedule.tz)
+
     def _hours_note(self, department: Department, day: date | None) -> str:
         """The department's opening hours, carried on every availability result.
 
@@ -741,9 +781,10 @@ class ReceptionistAgent(Agent):
             department: Which department, for example "dentistry" or "eye care".
             date: The date as YYYY-MM-DD, in the caller's own timezone.
             time: 24-hour HH:MM in the caller's own timezone, e.g. "17:30".
-            timezone: The caller's timezone if they stated one, for example
-                "IST" or "Pacific time". Leave empty to use the one already
-                established on this call. Never guess one.
+            timezone: The caller's timezone, but ONLY if they attached one to
+                this particular time, for example "ten am India time". Leave it
+                empty when they are taking a time you offered: everything you
+                read out is in our own timezone. Never guess one.
             reason: One short line on what they need to be seen about. Never a
                 diagnosis, just what they told you.
             raw_request: What the caller actually said about timing, e.g.
@@ -768,7 +809,14 @@ class ReceptionistAgent(Agent):
         if isinstance(tz, str):
             return tz
 
-        slot = _parse_slot(date, time, tz)
+        slot = self._accepting_an_offer(date, time, timezone)
+        if slot is not None:
+            # Transacted in our own time, because that is the clock they heard.
+            tz = self.schedule.tz
+        elif self._two_clocks_in_play(timezone):
+            return _whose_clock(time)
+        else:
+            slot = _parse_slot(date, time, tz)
         if slot is None:
             return f"'{date} {time}' is not a date and time. Work them out and call this again."
 
@@ -841,20 +889,43 @@ class ReceptionistAgent(Agent):
         )
 
     @function_tool
-    async def find_my_appointment(self, context: RunContext) -> str:
-        """Look up the caller's upcoming appointments from the number they rang on.
+    async def find_my_appointment(
+        self, context: RunContext, booking_ref: str = ""
+    ) -> str:
+        """Look an appointment up so you can say what it is before changing it.
 
-        Use this first whenever someone wants to check, move or cancel an
-        appointment. Do not ask for their number: this uses it automatically.
+        Use this whenever someone wants to check, move or cancel one. The
+        moment they give you a booking number, pass it here: without it this can
+        only go on the number they rang from, and that is not always there.
+
+        Args:
+            booking_ref: The four digit booking number, if they have given you
+                one, for example "7937". Leave empty to look them up by the
+                number they called from. Never ask for a phone number or an
+                email: we already have the number from the call.
         """
         if self.store is None:
             return _no_store()
+
+        # A real call asked for the four digit number, was given it four times,
+        # and told the caller each time that it could not be found. There was
+        # nowhere to put it: this tool had no argument, so the number went
+        # straight back into another lookup by phone number.
+        if (booking_ref or "").strip():
+            found = await self._resolve(booking_ref)
+            if isinstance(found, str):
+                return found
+            return (
+                f"Found it: {self._describe(found)}. Say the day and time back to "
+                f"them and ask if that is the one they mean."
+            )
 
         _, caller = _call_identity()
         if not caller:
             return (
                 "There is no caller number on this call, so nothing can be looked "
-                "up. Ask for the four digit booking number instead."
+                "up that way. Ask for the four digit booking number and call this "
+                "again, passing it as booking_ref."
             )
 
         try:
@@ -937,8 +1008,9 @@ class ReceptionistAgent(Agent):
         Args:
             date: The new date as YYYY-MM-DD in the caller's own timezone.
             time: The new time as 24-hour HH:MM in the caller's own timezone.
-            timezone: The caller's timezone if they stated one. Leave empty to
-                use the one already established on this call.
+            timezone: The caller's timezone, but ONLY if they attached one to
+                this new time. Leave it empty when they are taking a time you
+                offered: everything you read out is in our own timezone.
             booking_ref: The four digit booking number, if they gave you one.
                 Leave empty to use the appointment on the number they called from.
             raw_request: What they actually said about the new timing.
@@ -961,7 +1033,14 @@ class ReceptionistAgent(Agent):
         if isinstance(tz, str):
             return tz
 
-        slot = _parse_slot(date, time, tz)
+        slot = self._accepting_an_offer(date, time, timezone)
+        if slot is not None:
+            # Transacted in our own time, because that is the clock they heard.
+            tz = self.schedule.tz
+        elif self._two_clocks_in_play(timezone):
+            return _whose_clock(time)
+        else:
+            slot = _parse_slot(date, time, tz)
         if slot is None:
             return f"'{date} {time}' is not a date and time. Work them out and call this again."
 
@@ -1059,8 +1138,14 @@ class ReceptionistAgent(Agent):
         """Find the appointment a tool should act on, or say what to ask for."""
         assert self.store is not None
 
-        ref = (booking_ref or "").strip()
-        if ref:
+        spoken = (booking_ref or "").strip()
+        if spoken:
+            ref = _clean_ref(spoken)
+            if ref is None:
+                return (
+                    f"'{spoken}' is not a four digit booking number. Read back what "
+                    f"you heard and ask them to say it again, one digit at a time."
+                )
             try:
                 found = await self.store.find_by_ref(ref)
             except Exception:
@@ -1116,6 +1201,30 @@ class ReceptionistAgent(Agent):
                 "changing anything."
             )
         return found[0]
+
+
+def _clean_ref(spoken: str) -> str | None:
+    """A booking number as the sheet stores it, or None if it is not one.
+
+    References are zero padded to REF_DIGITS and `find_by_ref` is an exact
+    string match, so "forty two" would miss the booking stored as 0042. One
+    reference in ten starts with a zero, so without this the lookup fails for a
+    tenth of callers and tells them their booking does not exist.
+    """
+    digits = re.sub(r"\D", "", spoken or "")
+    if not digits or len(digits) > REF_DIGITS:
+        return None
+    return digits.zfill(REF_DIGITS)
+
+
+def _whose_clock(time: str) -> str:
+    """Told to save a bare time when two zones are live on the call."""
+    return (
+        f"Do not save yet - they have named a timezone on this call and '{time}' "
+        f"is not one of the times you offered, so whose clock it is cannot be "
+        f"told from here. Ask whether they mean our time or theirs, then call "
+        f"this again, passing their timezone if it is theirs."
+    )
 
 
 def _no_store() -> str:

@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from voice_agent.storage.appointments import (
+    REF_DIGITS,
     Appointment,
     AppointmentError,
     AppointmentStore,
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from voice_agent.config import Settings
 
 __all__ = [
+    "REF_DIGITS",
     "Appointment",
     "AppointmentError",
     "AppointmentStore",
