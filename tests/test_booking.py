@@ -10,11 +10,15 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from tests.fake_sheets import FakeSheetsClient
-from voice_agent.agents.receptionist import ReceptionistAgent, build_prompt_variables
+from voice_agent.agents.receptionist import (
+    ReceptionistAgent,
+    _confirmation_words,
+    build_prompt_variables,
+)
 from voice_agent.business import load_profile
 from voice_agent.config import Settings
 from voice_agent.prompts import render_prompt
-from voice_agent.scheduling import hours_for
+from voice_agent.scheduling import hours_for, hours_on, nearest_slots
 from voice_agent.storage.appointments import COLUMNS, AppointmentStore
 
 UTC = ZoneInfo("UTC")
@@ -770,28 +774,29 @@ def test_prompt_answers_availability_questions_without_taking_a_name(rendered):
     their name every time and never called check_availability, because the
     prompt listed the name first and framed the tool as a booking step.
     """
-    assert "When someone asks what's available" in rendered
-    assert "Answer the question. Do not ask for their name first" in rendered
-    assert "A name is needed to *save* a booking, not to *look one up*" in rendered
-    assert "If they have asked the same question twice, you have already got it wrong" in rendered
+    assert "A name is needed to *save* a booking, never to *look one up*" in rendered
+    assert "Asking for it first is the single most annoying thing" in rendered
+    assert "If they rephrase, you answered the wrong one" in rendered
 
 
 def test_prompt_orders_the_booking_flow_department_first(rendered):
     """Name last. Asking for it first is what stalled the call."""
-    assert "work out the department, find a time they're happy with, then take their name" in rendered
-    # In the numbered steps, department and availability both come before the name.
-    assert rendered.index("1. Which department they need") < rendered.index(
-        "2. Call check_availability"
-    ) < rendered.index("3. Once they pick one, take their name")
+    assert "department, then when suits them, then their name, then book" in rendered
+    # In the numbered steps the name comes after the department and the times.
+    assert rendered.index("1. Which department") < rendered.index(
+        "2. Ask when they want to come in"
+    ) < rendered.index("3. Offer two real times") < rendered.index("4. Take their name")
 
 
 def test_the_failed_exchange_is_kept_as_a_counter_example(rendered):
-    assert 'when is the doctor available?" and you say "May I have your name' in rendered
-    assert "four times in a row, and the caller gave up" in rendered
+    assert 'you say "May I have your name, please?"' in rendered
+    assert "a real call, four times in a row" in rendered
 
 
 def test_prompt_shows_a_worked_availability_first_dialogue(rendered):
-    assert "[call check_availability for dentistry]" in rendered
+    """Department, then when suits them, then the name. Never a tool marker."""
+    assert "When were you thinking of coming in?" in rendered
+    assert "[call " not in rendered
 
 
 def test_the_stiff_name_request_is_banned(rendered):
@@ -850,38 +855,123 @@ async def test_end_call_accepts_an_explicit_hangup(agent):
 
 
 @pytest.mark.asyncio
-async def test_availability_results_carry_the_departments_opening_hours(agent):
-    """The bug from the second real call.
+async def test_availability_with_no_day_asks_when_suits_them(agent):
+    """It used to push 7am and 7:30am the moment the caller said "dentist".
 
-    "When is he available?" means "what hours does he work", but the model
-    reads it as a booking step and calls check_availability. It answered with
-    two slot times five times running while the caller kept rephrasing, then
-    hung up. The hours now ride along on every availability result, so either
-    reading of the question can be answered from one tool call.
+    The caller had not said when they could come in. Ask, then offer.
     """
     result = await agent.check_availability(None, DEPARTMENT)
 
-    hours = hours_for(agent.schedule, agent.schedule.department(DEPARTMENT))
-    assert hours in result
-    assert "if they asked what hours we keep" in result.lower()
+    assert "Do not read times out yet" in result
+    assert "Ask which day suits them" in result
+    assert hours_for(agent.schedule, agent.schedule.department(DEPARTMENT)) in result
 
 
 @pytest.mark.asyncio
-async def test_hours_ride_along_on_a_specific_day_too(agent):
-    tomorrow = datetime.now(UTC).date() + timedelta(days=1)
+async def test_availability_on_a_day_quotes_that_days_hours(agent):
+    """The Saturday bug.
+
+    Given the whole week's hours, the model read the Monday-to-Friday half back
+    to a caller asking about a Saturday, which opens at eight and shuts at one.
+    """
+    schedule = agent.schedule
+    dept = schedule.department(DEPARTMENT)
+    today = datetime.now(UTC).astimezone(schedule.tz).date()
+    saturday = today + timedelta(days=(5 - today.weekday()) % 7 or 7)
+
     result = await agent.check_availability(
-        None, DEPARTMENT, day=tomorrow.strftime("%Y-%m-%d")
+        None, DEPARTMENT, day=saturday.strftime("%Y-%m-%d")
     )
 
-    hours = hours_for(agent.schedule, agent.schedule.department(DEPARTMENT))
-    assert hours in result
+    assert hours_on(schedule, dept, saturday, today=today) in result
+    # The weekday window must not be in there to be misread.
+    assert "7am to 5:30pm" not in result
+
+
+@pytest.mark.asyncio
+async def test_hours_are_quoted_in_clinic_time_and_the_zone_is_named(agent):
+    """Never convert. An IST caller hears our hours, labelled as ours.
+
+    Converting gave "he's in five thirty to ten thirty your time", which is
+    accurate and unusable: nobody recognises their own clinic's hours in it.
+    The caller's timezone is for reading what they asked for, not for saying
+    anything back to them.
+    """
+    schedule = agent.schedule
+    today = datetime.now(UTC).astimezone(schedule.tz).date()
+    saturday = today + timedelta(days=(5 - today.weekday()) % 7 or 7)
+
+    result = await agent.check_availability(
+        None, DEPARTMENT, day=saturday.strftime("%Y-%m-%d"), timezone="IST"
+    )
+
+    assert "your time" not in result
+    assert schedule.timezone_label in result
+    assert "8am to 1pm" in result
+
+
+@pytest.mark.asyncio
+async def test_the_time_they_asked_for_decides_which_slots_are_shown(agent):
+    """The ten o'clock bug.
+
+    A caller asked for ten. Seventeen slots were free that day including ten,
+    and the agent offered eight thirty and nine thirty, twice, because the tool
+    only ever returned the first three on the grid.
+    """
+    schedule = agent.schedule
+    today = datetime.now(UTC).astimezone(schedule.tz).date()
+    monday = today + timedelta(days=(0 - today.weekday()) % 7 or 7)
+
+    result = await agent.check_availability(
+        None, "eye care", day=monday.strftime("%Y-%m-%d"), time="10:00"
+    )
+
+    offered = result.split("Hours:")[0]
+    assert "10am" in offered
+    assert "8:30am" not in offered
+
+
+@pytest.mark.asyncio
+async def test_a_taken_time_offers_its_neighbours_not_the_start_of_the_day(agent):
+    schedule = agent.schedule
+    today = datetime.now(UTC).astimezone(schedule.tz).date()
+    monday = today + timedelta(days=(0 - today.weekday()) % 7 or 7)
+    await agent.book_appointment(
+        None, name="Someone", department="eye care",
+        date=monday.strftime("%Y-%m-%d"), time="10:00",
+    )
+
+    result = await agent.check_availability(
+        None, "eye care", day=monday.strftime("%Y-%m-%d"), time="10:00"
+    )
+
+    offered = result.split("Hours:")[0]
+    assert "nothing at that exact time" in offered
+    assert "9:30am" in offered and "10:30am" in offered
+    assert "8:30am" not in offered
+
+
+@pytest.mark.asyncio
+async def test_a_time_outside_opening_hours_says_the_window_they_can_book(agent):
+    """"Ten AM IST" is half two in the morning here. Say when they can."""
+    schedule = agent.schedule
+    today = datetime.now(UTC).astimezone(schedule.tz).date()
+    monday = today + timedelta(days=(0 - today.weekday()) % 7 or 7)
+
+    result = await agent.check_availability(
+        None, "eye care", day=monday.strftime("%Y-%m-%d"), time="10:00", timezone="IST"
+    )
+
+    assert "outside eye care hours" in result
+    assert "8:30am to 5pm" in result
+    assert schedule.timezone_label in result
 
 
 def test_prompt_separates_the_hours_question_from_the_slots_question(rendered):
-    assert "Two different questions, two different answers" in rendered
+    assert "Two different questions" in rendered
     assert "usually means **what hours does he work**" in rendered
-    assert "give the hours first and then offer times" in rendered
-    assert "Never answer a third time with the same two slot times" in rendered
+    assert "for the day they asked about" in rendered
+    assert "Never give the same two slot times a third time" in rendered
 
 
 def test_the_worked_example_answers_availability_with_the_hours(rendered):
@@ -890,10 +980,13 @@ def test_the_worked_example_answers_availability_with_the_hours(rendered):
     This example used to answer "when is he available?" with two slot times,
     which is precisely the failure. The model was copying it faithfully.
     """
-    asked = rendered.index("Caller: Can you tell me when he's available?")
-    answer = rendered[asked : asked + 260]
+    asked = rendered.index("I want to see the dentist. When's he available?")
+    answer = rendered[asked : asked + 300]
     assert "He's in Monday to Friday" in answer
-    assert "seven in the morning to half five" in answer
+    assert "Saturday mornings till one" in answer
+    # And the follow-up about a Saturday gets Saturday's hours, not the week's.
+    saturday = rendered.index("So tomorrow, from what time to what time?")
+    assert "he's in eight till one" in rendered[saturday : saturday + 200]
 
 
 def test_prompt_keeps_the_repeated_slot_times_as_a_counter_example(rendered):
@@ -907,3 +1000,133 @@ def test_prompt_skips_the_anything_else_ritual_on_an_explicit_hangup(rendered):
     assert "**Unless they asked you to hang up.**" in rendered
     assert "do not ask them to confirm" in rendered
     assert 'Caller says "cut the call" and you say "Anything else' in rendered
+
+
+# --- Regressions from the third real call, 2026-09-11 --------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_stale_raw_request_cannot_confirm_the_wrong_time(agent):
+    """The worst bug in the third call.
+
+    The model booked 18:00 while passing raw_request="tomorrow at ten AM Indian
+    Standard Time", left over from two turns earlier. The tool echoed it, so
+    the caller was told a time that was never saved. The words are only used
+    when the hour in them agrees with what actually got booked.
+    """
+    slot = next_open_slot()
+    spoken = local(slot)
+
+    result = await agent.book_appointment(
+        None,
+        name="Vinay",
+        department=DEPARTMENT,
+        date=spoken["date"],
+        time=spoken["time"],
+        raw_request="tomorrow at ten AM Indian Standard Time",
+    )
+
+    assert "ten AM" not in result
+    assert "Saved" in result
+
+
+@pytest.mark.asyncio
+async def test_the_callers_own_words_survive_when_they_match(agent):
+    """Constraint 26 still holds: confirm in their phrasing, not in ours."""
+    slot = next_open_slot()
+    spoken = local(slot)
+    hour = int(spoken["time"].split(":")[0]) % 12 or 12
+    minute = int(spoken["time"].split(":")[1])
+    said = f"{hour}:{minute:02d}" if minute else str(hour)
+
+    result = await agent.book_appointment(
+        None,
+        name="Vinay",
+        department=DEPARTMENT,
+        date=spoken["date"],
+        time=spoken["time"],
+        raw_request=f"tomorrow at {said}",
+    )
+
+    assert f'"tomorrow at {said}"' in result
+
+
+def test_vague_timing_words_are_never_second_guessed():
+    """"tomorrow evening" has no hour in it to contradict."""
+    tz = ZoneInfo("Asia/Kolkata")
+    slot = datetime.now(tz).replace(hour=18, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    assert _confirmation_words("tomorrow evening", slot, tz) == "tomorrow evening"
+    assert _confirmation_words("six PM", slot, tz) == "six PM"
+    assert "6pm" in _confirmation_words("ten AM", slot, tz)
+    assert "6pm" in _confirmation_words("six thirty", slot, tz)
+
+
+@pytest.mark.asyncio
+async def test_a_correction_reuses_the_booking_just_made(agent):
+    """The agent asked the caller for the four digit number it had just read out.
+
+    "Wait, I asked for six PM" is a correction to the booking made seconds
+    earlier, not a request to look something up.
+    """
+    slot = next_open_slot()
+    spoken = local(slot)
+    await agent.book_appointment(
+        None, name="Vinay", department=DEPARTMENT, date=spoken["date"], time=spoken["time"]
+    )
+    ref = agent.last_booking.booking_ref
+
+    # No booking_ref, and console mode has no caller number either.
+    result = await agent.cancel_appointment(None)
+
+    assert "Ask for the four digit booking number" not in result
+    assert ref in result
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_booking_is_not_reused_as_the_target(agent):
+    """Otherwise the second cancel would silently re-target the dead one."""
+    slot = next_open_slot()
+    spoken = local(slot)
+    await agent.book_appointment(
+        None, name="Vinay", department=DEPARTMENT, date=spoken["date"], time=spoken["time"]
+    )
+    await agent.cancel_appointment(None)
+
+    result = await agent.cancel_appointment(None)
+
+    assert "four digit booking number" in result
+
+
+def test_prompt_never_converts_our_hours_into_the_callers_zone(rendered):
+    """Option A: say our time, name the zone, let them do their own maths."""
+    label = load_profile().schedule.timezone_label
+    assert "Every time you say out loud is our time, and you name it" in rendered
+    assert label in rendered
+    assert "Never do timezone arithmetic in your head" in rendered
+    assert "not even when asked directly" in rendered
+
+
+def test_prompt_says_what_to_do_when_their_time_is_out_of_hours(rendered):
+    assert "If it lands inside our hours, book it" in rendered
+    assert "give them the window they can book in, in our time, named" in rendered
+
+
+def test_no_worked_example_converts_our_hours(rendered):
+    """Constraint 21: an example that breaks the rule beats the rule."""
+    asked = rendered.index("Can I get an eye exam at ten in the morning, India time?")
+    block = rendered[asked : asked + 420]
+    assert "Ohio time" in block
+    assert "your time" not in block.replace("in my time", "")
+    assert "rather not get that wrong" in block
+
+
+def test_nearest_slots_prefers_the_requested_time_over_the_start_of_the_day():
+    base = datetime(2026, 9, 14, 12, 30, tzinfo=UTC)
+    grid = [base + timedelta(minutes=30 * i) for i in range(17)]
+
+    picked = nearest_slots(grid, base + timedelta(hours=1, minutes=30), 3)
+
+    assert picked == [grid[2], grid[3], grid[4]]
+    # And they come back in time order, not in order of closeness.
+    assert picked == sorted(picked)

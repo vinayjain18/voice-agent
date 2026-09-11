@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import time as clock
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from livekit.agents import (
@@ -28,9 +28,12 @@ from voice_agent.scheduling import (
     Schedule,
     available_slots,
     hours_for,
+    hours_on,
+    nearest_slots,
     next_available,
     render_hours,
     speak_slot,
+    speak_time,
 )
 from voice_agent.storage import (
     Appointment,
@@ -408,11 +411,13 @@ class ReceptionistAgent(Agent):
         self.caller_tz = tz
         return tz
 
-    def _offers(self, slots: list[datetime], tz) -> str:
+    def _offers(self, slots: list[datetime]) -> str:
+        """Slot times as the agent will say them: always in the clinic's zone."""
+        tz = self.schedule.tz
         today = datetime.now(tz).date()
         return ", ".join(speak_slot(slot, tz=tz, today=today) for slot in slots)
 
-    def _hours_note(self, department: Department) -> str:
+    def _hours_note(self, department: Department, day: date | None) -> str:
         """The department's opening hours, carried on every availability result.
 
         "When is the doctor available?" is a question about opening hours, but
@@ -420,11 +425,38 @@ class ReceptionistAgent(Agent):
         real call it answered with two slot times five times running while the
         caller kept rephrasing. Shipping the hours alongside the slots means
         either reading of the question can be answered from one tool result.
+
+        Scoped to the day they asked about: given the whole week, the model read
+        the Monday-to-Friday half back to a caller asking about a Saturday.
         """
+        if day is None:
+            return f"Hours: {hours_for(self.schedule, department)}"
+        today = datetime.now(self.schedule.tz).date()
+        return f"Hours: {hours_on(self.schedule, department, day, today=today)}"
+
+    def _closed_note(self, department: Department, asked_at: datetime) -> str:
+        """Told to book outside opening hours, say when they actually can.
+
+        The window is quoted in the clinic's timezone and named, because a
+        caller who asked in IST has just been told their time does not work and
+        needs something they can act on rather than a second conversion.
+        """
+        tz = self.schedule.tz
+        local = asked_at.astimezone(tz)
+        grid = department.slots_on(local.date(), hospital_tz=tz)
+        if not grid:
+            return (
+                f"{department.name} is closed on "
+                f"{local.strftime('%A %d %B')}. Say so and offer another day. "
+                f"{self._hours_note(department, local.date())}"
+            )
+        last = grid[-1] + timedelta(minutes=department.slot_minutes)
+        if grid[0] <= asked_at < last:
+            return ""
         return (
-            f"{hours_for(self.schedule, department)} Say that if they asked what "
-            f"hours we keep or when someone works. If they asked what is free, "
-            f"offer two of the times above, not all."
+            f"{speak_time(local)} is outside {department.name} hours. Say we are "
+            f"not open then, and tell them the window they can book in: "
+            f"{self._hours_note(department, local.date())} Then offer a time in it."
         )
 
     @function_tool
@@ -456,6 +488,7 @@ class ReceptionistAgent(Agent):
         context: RunContext,
         department: str,
         day: str = "",
+        time: str = "",
         timezone: str = "",
     ) -> str:
         """Find appointment times that are actually free in a department.
@@ -467,11 +500,17 @@ class ReceptionistAgent(Agent):
             department: Which department they need, for example "dentistry",
                 "eye care" or "family medicine". Work it out from what they say
                 they need. Ask if it is not clear; do not guess.
-            day: The day to check, as YYYY-MM-DD in the caller's own timezone.
-                Leave empty for the soonest times on any day.
+            day: The day to check, as YYYY-MM-DD. Leave empty for the soonest
+                times on any day.
+            time: The time of day they asked for, as 24-hour HH:MM, if they
+                named one. ALWAYS pass this when they do: it is what decides
+                which slots you are shown. Without it you get the first few of
+                the day, which is how a caller asking for ten ends up being
+                offered eight thirty twice.
             timezone: The caller's timezone, only if they have said one, for
-                example "IST", "Pacific time" or "South African time". Leave
-                empty to use the one already established on this call.
+                example "IST", "Pacific time" or "South African time". This is
+                used to work out which instant they mean. Times are always read
+                back in the clinic's own timezone, never converted.
         """
         if self.cache is None:
             return _no_store()
@@ -520,6 +559,14 @@ class ReceptionistAgent(Agent):
                 now=now,
                 min_notice_minutes=MIN_NOTICE_MINUTES,
             )
+
+            # What they actually asked for decides which slots we show them.
+            asked_at = _parse_slot(day, time, tz) if time.strip() else None
+            if asked_at is not None:
+                shut = self._closed_note(target, asked_at)
+                if shut:
+                    return shut
+
             if not free:
                 fallback = next_available(
                     self.schedule,
@@ -536,12 +583,28 @@ class ReceptionistAgent(Agent):
                     )
                 return (
                     f"{target.name} is full on {wanted.strftime('%A %d %B')}. Say so, "
-                    f"then offer these instead: {self._offers(fallback, tz)}. "
-                    f"{self._hours_note(target)}"
+                    f"then offer these instead: {self._offers(fallback)}. "
+                    f"{self._hours_note(target, wanted)}"
+                )
+            if asked_at is not None:
+                pick = nearest_slots(free, asked_at, MAX_OFFERS)
+                exact = next((slot for slot in pick if slot == asked_at), None)
+                if exact is not None:
+                    return (
+                        f"{self._offers([exact])} "
+                        f"is free in {target.name}. Offer that one. "
+                        f"{self._hours_note(target, wanted)}"
+                    )
+                return (
+                    f"{target.name} has nothing at that exact time on "
+                    f"{wanted.strftime('%A %d %B')}. Nearest free: "
+                    f"{self._offers(pick)}. Say their time has gone, then offer two "
+                    f"of these. {self._hours_note(target, wanted)}"
                 )
             return (
                 f"{target.name} on {wanted.strftime('%A %d %B')}: "
-                f"{self._offers(free[:MAX_OFFERS], tz)}. {self._hours_note(target)}"
+                f"{self._offers(free[:MAX_OFFERS])}. "
+                f"{self._hours_note(target, wanted)} Offer two, not all."
             )
 
         soonest = next_available(
@@ -557,9 +620,14 @@ class ReceptionistAgent(Agent):
                 f"{target.name} has nothing free in the next few weeks. Offer to "
                 "have the desk call them back."
             )
+        # No day named. Do NOT lead with slot times: on a real call the agent
+        # pushed 7am and 7:30am the moment the caller said "dentist", before it
+        # knew when they could actually come in. Ask first, offer second.
         return (
-            f"Soonest free in {target.name}: {self._offers(soonest, tz)}. "
-            f"{self._hours_note(target)}"
+            f"{self._hours_note(target, None)} "
+            f"Do not read times out yet. Ask which day suits them, and roughly "
+            f"what time of day. Only if they have no preference, offer these: "
+            f"{self._offers(soonest)}."
         )
 
     @function_tool
@@ -622,6 +690,12 @@ class ReceptionistAgent(Agent):
         if slot <= now:
             return "That time has already passed. Do not book it. Offer the next free slot instead."
         if not self.schedule.is_valid_slot(target, slot):
+            # Out of hours and off-grid are different problems. A caller asking
+            # for ten in the morning IST needs the window they can actually
+            # book in, not "that is not an appointment time".
+            shut = self._closed_note(target, slot)
+            if shut:
+                return shut
             return (
                 f"{time} is not one of the appointment times in {target.name}. Call "
                 "check_availability and offer a time it gives you."
@@ -658,9 +732,7 @@ class ReceptionistAgent(Agent):
 
         self.cache.invalidate()
         self.last_booking = appointment
-        spoken = (raw_request or "").strip() or speak_slot(
-            slot, tz=tz, today=datetime.now(tz).date()
-        )
+        spoken = _confirmation_words(raw_request, slot, tz)
         digits = " ".join(appointment.booking_ref)
         return (
             f"Saved with {target.name}. Now say it back to them out loud using "
@@ -910,6 +982,21 @@ class ReceptionistAgent(Agent):
                 return f"Booking {ref} is already cancelled. Tell them, and offer to book a new one."
             return found
 
+        # A booking made earlier in this same call is what "no, I said six"
+        # refers to. On a real call the agent asked the caller for the four
+        # digit number it had read aloud to them thirty seconds before.
+        if self.last_booking is not None:
+            # Re-read rather than trusting the snapshot taken at creation: it
+            # still says active after the booking has been cancelled, which
+            # would let a second cancel "succeed" against a dead row.
+            try:
+                current = await self.store.find_by_ref(self.last_booking.booking_ref)
+            except Exception:
+                logger.exception("could not re-read the booking made on this call")
+                current = None
+            if current is not None and current.is_active:
+                return current
+
         _, caller = _call_identity()
         if not caller:
             return (
@@ -1000,3 +1087,65 @@ def _call_identity() -> tuple[str, str]:
         logger.debug("could not resolve caller identity", exc_info=True)
 
     return room, ""
+
+
+def _confirmation_words(raw_request: str, slot: datetime, tz) -> str:
+    """What to say back to the caller: their words, but only if they match.
+
+    Constraint 26 says confirm in the caller's own phrasing. The model supplies
+    that phrasing, and on a real call it supplied a stale one: it booked 18:00
+    while passing raw_request="tomorrow at ten AM Indian Standard Time", so the
+    caller was told a time that was never saved.
+
+    The caller's words are used only when the clock time in them agrees with
+    what actually got booked. Otherwise the real time wins. Saying it less
+    naturally is survivable; saying the wrong time is not.
+    """
+    said = (raw_request or "").strip()
+    local = slot.astimezone(tz)
+    plain = speak_slot(slot, tz=tz, today=datetime.now(tz).date())
+    if not said:
+        return plain
+    if not _mentions_clock_time(said):
+        # "tomorrow evening", "first thing" - no number to contradict.
+        return said
+    return said if _states_hour(said, local.hour, local.minute) else plain
+
+
+def _mentions_clock_time(said: str) -> bool:
+    return bool(re.search(r"\d", said)) or bool(
+        re.search(r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b",
+                  said.lower())
+    )
+
+
+_WORD_HOURS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+}
+
+
+def _states_hour(said: str, hour: int, minute: int) -> bool:
+    """True when `said` names the same clock hour the slot actually falls on."""
+    text = said.lower()
+    wanted = hour % 12 or 12
+    found: set[int] = set()
+
+    for digits, mins in re.findall(r"\b(\d{1,2})(?::(\d{2}))?\b", text):
+        value = int(digits)
+        if value > 24:
+            continue
+        if mins and int(mins) != minute:
+            continue
+        found.add(value % 12 or 12)
+    for word, value in _WORD_HOURS.items():
+        if re.search(rf"\b{word}\b", text):
+            found.add(value)
+
+    if not found:
+        return False
+    if wanted not in found:
+        return False
+    # "half five" and "five thirty" carry the minutes in words, so an on-the-
+    # hour slot contradicts them even though the hour itself matches.
+    return not (minute == 0 and re.search(r"\b(?:thirty|half)\b", text))

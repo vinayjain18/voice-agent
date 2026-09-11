@@ -76,6 +76,10 @@ class Department:
 @dataclass(frozen=True)
 class Schedule:
     timezone: str = "America/New_York"
+    # How the clinic's timezone is said out loud, e.g. "Ohio time". Every time
+    # the agent speaks is in this zone, so the label is what stops a caller in
+    # another country hearing "eight thirty" as their own morning.
+    timezone_label: str = "Ohio time"
     booking_horizon_days: int = 60
     departments: dict[str, Department] = field(default_factory=dict)
     # Spoken names callers use ("eye doctor") mapped to a department key.
@@ -156,6 +160,23 @@ def available_slots(
     ]
 
 
+def nearest_slots(
+    free: list[datetime], target: datetime, limit: int
+) -> list[datetime]:
+    """The free slots closest to what the caller actually asked for.
+
+    Taking the first few of the day instead is what produced this on a real
+    call: the caller asked for ten, seventeen slots were free including ten,
+    and the agent offered eight thirty and nine thirty twice over because the
+    only slots it was ever shown were the first three on the grid.
+
+    Ties go to the earlier slot, and the result stays in time order so the
+    agent reads them out in the order a person would expect.
+    """
+    ranked = sorted(free, key=lambda slot: (abs(slot - target), slot))
+    return sorted(ranked[:limit])
+
+
 def next_available(
     schedule: Schedule,
     department: Department,
@@ -234,6 +255,7 @@ def load_schedule(raw: dict, aliases: dict | None = None) -> Schedule:
 
     return Schedule(
         timezone=timezone,
+        timezone_label=str(raw.get("timezone_label", "")).strip() or "our time",
         booking_horizon_days=int(raw.get("booking_horizon_days", 60)),
         departments=departments,
         aliases=resolved,
@@ -291,14 +313,19 @@ def render_hours(schedule: Schedule) -> str:
     for hours, names in sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0])):
         verb = "are" if len(names) > 1 else "is"
         parts.append(f"{_join(names).capitalize()} {verb} {hours}.")
+    # Named once at the end: repeating it on ten lines is unreadable aloud.
+    parts.append(f"All times are {schedule.timezone_label}.")
     return " ".join(parts)
 
 
 def hours_for(schedule: Schedule, department: Department) -> str:
-    """The spoken hours for one department."""
+    """The spoken hours for one department, in clinic time, zone named."""
     if department.is_always_open:
         return f"{department.name.capitalize()} is open twenty four hours a day."
-    return f"{department.name.capitalize()} is {_window_text(department)}."
+    return (
+        f"{department.name.capitalize()} is {_window_text(department)} "
+        f"{schedule.timezone_label}."
+    )
 
 
 def _window_text(department: Department) -> str:
@@ -362,3 +389,43 @@ def speak_slot(moment: datetime, *, tz: ZoneInfo, today: date | None = None) -> 
         if delta == 1:
             return f"tomorrow at {when}"
     return f"{local.strftime('%A %d %B')} at {when}"
+
+
+def hours_on(
+    schedule: Schedule,
+    department: Department,
+    day: date,
+    *,
+    today: date | None = None,
+    say_zone: bool = True,
+) -> str:
+    """The spoken hours for one department on one specific day, in clinic time.
+
+    `hours_for` renders the whole week, and on a real call the model read the
+    Monday-to-Friday half of it back to a caller asking about a Saturday.
+
+    Everything the agent says is in the clinic's own timezone, named rather
+    than converted. Converting produced "he's in five thirty to ten thirty your
+    time", which is accurate and unusable: nobody recognises their own clinic's
+    hours in it, and it cannot be checked against anything written down.
+    """
+    when = _day_word(day, today)
+    if department.is_always_open:
+        return f"{department.name.capitalize()} is open all day {when}."
+
+    windows = department.weekly.get(DAY_NAMES[day.weekday()], [])
+    if not windows:
+        return f"{department.name.capitalize()} is closed {when}."
+
+    zone = f" {schedule.timezone_label}" if say_zone else ""
+    return f"{department.name.capitalize()} is in {when}, {_spans(windows)}{zone}."
+
+
+def _day_word(day: date, today: date | None) -> str:
+    if today is not None:
+        delta = (day - today).days
+        if delta == 0:
+            return "today"
+        if delta == 1:
+            return "tomorrow"
+    return f"on {day.strftime('%A')}"

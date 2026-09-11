@@ -190,20 +190,32 @@ def test_prompt_demands_a_spoken_sign_off(rendered):
     assert "Thanks for calling, have a good day." in rendered
 
 
-def test_examples_show_the_goodbye_after_end_call(rendered):
-    """The examples are the strongest signal, so they must not end on the tool call.
+def test_the_goodbye_after_end_call_is_enforced_by_the_tool(rendered):
+    """The sign-off has to come after the tool call, not instead of it.
 
-    Both worked dialogues previously stopped at "[call end_call]", teaching the
-    model that a call just stops. The closing line has to be demonstrated, and
-    in the order it actually happens: tool first, then the spoken sign-off.
+    This used to be taught by a "[call end_call]" line in a worked example. That
+    notation leaked: on a real call the model spoke
+    'Which works for you?[call book_appointment {"date":"2026-09-12",...}]'
+    out loud, having learned the syntax from the examples. The examples are now
+    marker free, so the ordering is pinned where it is actually enforced: the
+    tool's own return text, plus the rule in the prompt.
     """
-    lines = rendered.splitlines()
-    tool_calls = [i for i, line in enumerate(lines) if line.strip() == "[call end_call]"]
-    assert tool_calls, "no end_call example at all"
-    for i in tool_calls:
-        following = lines[i + 1]
-        assert following.startswith("You: "), f"nothing spoken after end_call: {following!r}"
-        assert "thanks for calling" in following.lower()
+    from voice_agent.agents.receptionist import INBOUND_GOODBYE, OUTBOUND_GOODBYE
+
+    for text in (INBOUND_GOODBYE, OUTBOUND_GOODBYE):
+        assert "ONE short sentence" in text
+        assert "thank" in text.lower()
+
+    flat = " ".join(rendered.split())
+    assert "Calling end_call is not the end of the conversation" in flat
+    assert "one last turn" in flat
+
+
+def test_no_worked_example_writes_out_a_tool_call(rendered):
+    """The notation the model copied into speech must not come back."""
+    assert "[call " not in rendered
+    flat = " ".join(rendered.split())
+    assert "Never write a tool name, a function call or its arguments" in flat
 
 
 def test_goodbye_instructions_are_direction_aware():

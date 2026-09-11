@@ -61,6 +61,7 @@ class BusinessProfile:
         out["hours"] = render_hours(schedule)
         out["departments"] = self.department_block()
         out["hospital_timezone"] = schedule.timezone
+        out["timezone_label"] = schedule.timezone_label
         out["booking_horizon_days"] = str(schedule.booking_horizon_days)
         out["faqs"] = self.faq_block()
         return out

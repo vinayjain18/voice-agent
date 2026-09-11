@@ -10,18 +10,49 @@
   "_hours_note": "Outpatient clinic hours, not the emergency room. The ER runs around the clock and is not bookable: see `emergency_room`. Sourced hours: dentistry 7:00-17:30 plus Saturdays (ADA), eye care 8:30-17:00 (ophthalmology), dermatology 8:00-17:00, orthopedics 8:00-16:30, pediatrics 7:00-18:00. The rest follow the common US outpatient pattern of early morning to late afternoon, Monday to Friday. Every department is 30 minute slots.",
   "schedule": {
     "timezone": "America/New_York",
+    "timezone_label": "Ohio time",
     "booking_horizon_days": 60,
     "departments": {
       "family medicine": {
         "slot_minutes": 30,
         "description": "checkups, colds and flu, everyday illness, ongoing conditions",
         "weekly": {
-          "monday": [["07:00", "19:00"]],
-          "tuesday": [["07:00", "19:00"]],
-          "wednesday": [["07:00", "19:00"]],
-          "thursday": [["07:00", "19:00"]],
-          "friday": [["07:00", "19:00"]],
-          "saturday": [["08:00", "13:00"]],
+          "monday": [
+            [
+              "07:00",
+              "19:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "07:00",
+              "19:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "07:00",
+              "19:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "07:00",
+              "19:00"
+            ]
+          ],
+          "friday": [
+            [
+              "07:00",
+              "19:00"
+            ]
+          ],
+          "saturday": [
+            [
+              "08:00",
+              "13:00"
+            ]
+          ],
           "sunday": []
         }
       },
@@ -29,12 +60,42 @@
         "slot_minutes": 30,
         "description": "cleanings, fillings, toothache, crowns",
         "weekly": {
-          "monday": [["07:00", "17:30"]],
-          "tuesday": [["07:00", "17:30"]],
-          "wednesday": [["07:00", "17:30"]],
-          "thursday": [["07:00", "17:30"]],
-          "friday": [["07:00", "17:30"]],
-          "saturday": [["08:00", "13:00"]],
+          "monday": [
+            [
+              "07:00",
+              "17:30"
+            ]
+          ],
+          "tuesday": [
+            [
+              "07:00",
+              "17:30"
+            ]
+          ],
+          "wednesday": [
+            [
+              "07:00",
+              "17:30"
+            ]
+          ],
+          "thursday": [
+            [
+              "07:00",
+              "17:30"
+            ]
+          ],
+          "friday": [
+            [
+              "07:00",
+              "17:30"
+            ]
+          ],
+          "saturday": [
+            [
+              "08:00",
+              "13:00"
+            ]
+          ],
           "sunday": []
         }
       },
@@ -42,11 +103,36 @@
         "slot_minutes": 30,
         "description": "eye exams, vision tests, glasses and contact lens prescriptions",
         "weekly": {
-          "monday": [["08:30", "17:00"]],
-          "tuesday": [["08:30", "17:00"]],
-          "wednesday": [["08:30", "17:00"]],
-          "thursday": [["08:30", "17:00"]],
-          "friday": [["08:30", "17:00"]],
+          "monday": [
+            [
+              "08:30",
+              "17:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "08:30",
+              "17:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "08:30",
+              "17:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "08:30",
+              "17:00"
+            ]
+          ],
+          "friday": [
+            [
+              "08:30",
+              "17:00"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
@@ -55,12 +141,42 @@
         "slot_minutes": 30,
         "description": "children from birth to eighteen",
         "weekly": {
-          "monday": [["07:00", "18:00"]],
-          "tuesday": [["07:00", "18:00"]],
-          "wednesday": [["07:00", "18:00"]],
-          "thursday": [["07:00", "18:00"]],
-          "friday": [["07:00", "18:00"]],
-          "saturday": [["08:00", "12:00"]],
+          "monday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "friday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "saturday": [
+            [
+              "08:00",
+              "12:00"
+            ]
+          ],
           "sunday": []
         }
       },
@@ -68,11 +184,36 @@
         "slot_minutes": 30,
         "description": "bones, joints, sports injuries, back and knee pain",
         "weekly": {
-          "monday": [["08:00", "16:30"]],
-          "tuesday": [["08:00", "16:30"]],
-          "wednesday": [["08:00", "16:30"]],
-          "thursday": [["08:00", "16:30"]],
-          "friday": [["08:00", "16:30"]],
+          "monday": [
+            [
+              "08:00",
+              "16:30"
+            ]
+          ],
+          "tuesday": [
+            [
+              "08:00",
+              "16:30"
+            ]
+          ],
+          "wednesday": [
+            [
+              "08:00",
+              "16:30"
+            ]
+          ],
+          "thursday": [
+            [
+              "08:00",
+              "16:30"
+            ]
+          ],
+          "friday": [
+            [
+              "08:00",
+              "16:30"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
@@ -81,11 +222,36 @@
         "slot_minutes": 30,
         "description": "skin, hair and nails, rashes, moles",
         "weekly": {
-          "monday": [["08:00", "17:00"]],
-          "tuesday": [["08:00", "17:00"]],
-          "wednesday": [["08:00", "17:00"]],
-          "thursday": [["08:00", "17:00"]],
-          "friday": [["08:00", "17:00"]],
+          "monday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "friday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
@@ -94,11 +260,36 @@
         "slot_minutes": 30,
         "description": "heart checks, blood pressure, palpitations",
         "weekly": {
-          "monday": [["08:00", "17:00"]],
-          "tuesday": [["08:00", "17:00"]],
-          "wednesday": [["08:00", "17:00"]],
-          "thursday": [["08:00", "17:00"]],
-          "friday": [["08:00", "17:00"]],
+          "monday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "friday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
@@ -107,11 +298,36 @@
         "slot_minutes": 30,
         "description": "women's health, pregnancy care, annual exams",
         "weekly": {
-          "monday": [["08:00", "17:00"]],
-          "tuesday": [["08:00", "17:00"]],
-          "wednesday": [["08:00", "17:00"]],
-          "thursday": [["08:00", "17:00"]],
-          "friday": [["08:00", "17:00"]],
+          "monday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "friday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
@@ -120,11 +336,36 @@
         "slot_minutes": 30,
         "description": "hearing, sinuses, sore throats, tonsils",
         "weekly": {
-          "monday": [["08:00", "17:00"]],
-          "tuesday": [["08:00", "17:00"]],
-          "wednesday": [["08:00", "17:00"]],
-          "thursday": [["08:00", "17:00"]],
-          "friday": [["08:00", "17:00"]],
+          "monday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
+          "friday": [
+            [
+              "08:00",
+              "17:00"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
@@ -133,11 +374,36 @@
         "slot_minutes": 30,
         "description": "rehab after injury or surgery, mobility work",
         "weekly": {
-          "monday": [["07:00", "18:00"]],
-          "tuesday": [["07:00", "18:00"]],
-          "wednesday": [["07:00", "18:00"]],
-          "thursday": [["07:00", "18:00"]],
-          "friday": [["07:00", "18:00"]],
+          "monday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
+          "friday": [
+            [
+              "07:00",
+              "18:00"
+            ]
+          ],
           "saturday": [],
           "sunday": []
         }
