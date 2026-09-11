@@ -1,8 +1,8 @@
 {
-  "_comment": "DEMO CONTENT for a portfolio project. Cedar Hollow Medical Center is FICTIONAL, invented for this demo. It is not a real hospital and must not be presented as one. Replace every line before this is used with real patients.",
+  "_comment": "DEMO CONTENT for a portfolio project. Hollow Medical Center is FICTIONAL, invented for this demo. It is not a real hospital and must not be presented as one. Replace every line before this is used with real patients.",
   "_schedule_note": "`schedule` is the single source of truth for the slot grid and for the spoken hours. A department with no `weekly` block is open around the clock; every department here keeps outpatient office hours instead. The emergency room is not a bookable department.",
   "_timezone_note": "schedule.timezone is the hospital's own timezone, used for rendering. Appointments are stored in UTC, and callers can give times in any timezone they like.",
-  "business_name": "Cedar Hollow Medical Center",
+  "business_name": "Hollow Medical Center",
   "agent_name": "Emma",
   "industry": "multispecialty medical center",
   "location": "Columbus, Ohio",
@@ -213,8 +213,8 @@
   "emergency_number": "911",
   "emergency_room": "Our emergency room is open twenty four hours a day, seven days a week, and you don't need an appointment for it.",
   "escalation_contact": "our patient services team",
-  "contact_email": "frontdesk@cedarhollowmed.example",
-  "greeting_inbound": "Thank you for calling Cedar Hollow Medical Center. This is Emma. How can I help you today?",
-  "greeting_outbound": "Hi, this is Emma calling from Cedar Hollow Medical Center. Is now an okay time?",
-  "greeting_reminder": "Hi, this is Emma from Cedar Hollow Medical Center, just calling about your upcoming appointment. Is now an okay time?"
+  "contact_email": "frontdesk@hollowmed.example",
+  "greeting_inbound": "Thank you for calling Hollow Medical Center. This is Emma. How can I help you today?",
+  "greeting_outbound": "Hi, this is Emma calling from Hollow Medical Center. Is now an okay time?",
+  "greeting_reminder": "Hi, this is Emma from Hollow Medical Center, just calling about your upcoming appointment. Is now an okay time?"
 }

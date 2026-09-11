@@ -216,14 +216,60 @@ DONE_PHRASES = (
 
 MAX_CLOSING_ANSWER_WORDS = 8
 
+# A direct instruction to hang up, which is not the same as answering "no" to
+# "anything else?". A real call had the caller say "Cut the call." twice and the
+# agent answer "Anything else I can help you with?" both times.
+HANGUP_PHRASES = (
+    "cut the call", "cut call", "end the call", "end call", "hang up",
+    "hangup", "disconnect the call", "disconnect me", "drop the call",
+    "please cut", "just hang",
+)
+
+# "Don't cut the call" means the opposite, and the word before matters more than
+# the phrase itself.
+NEGATIONS = ("don't", "dont", "do not", "never", "no need to", "not")
+
+
+def asks_to_hang_up(text: str) -> bool:
+    """True when the caller has directly told you to end the call.
+
+    Separate from the "no, nothing else" test because it is an instruction, not
+    an answer, and length does not matter: "sorry, could you just cut the call
+    please" is still a request to hang up.
+    """
+    lowered = (text or "").lower()
+    return any(
+        phrase in lowered and not _negated(lowered, phrase) for phrase in HANGUP_PHRASES
+    )
+
+
+def _negated(text: str, phrase: str) -> bool:
+    """True when a negation sits just before the phrase.
+
+    "Don't cut the call" is the opposite instruction, and hanging up on it would
+    be the worst possible reading.
+    """
+    before = text[: text.find(phrase)]
+    tail = " ".join(before.split()[-3:])
+    return any(word in tail for word in NEGATIONS)
+
 
 def caller_sounds_finished(text: str) -> bool:
     """True when the caller's last turn reads as "no, nothing else".
 
     Deliberately strict: refusing to end a finished call costs one extra
     question, while ending an unfinished one cuts the caller off mid-sentence.
+    A direct "hang up" is the exception, and bypasses the length limit.
     """
     lowered = (text or "").lower()
+    if asks_to_hang_up(lowered):
+        return True
+    # "No need to end the call" contains a closing word and means the opposite.
+    # A negated hangup request vetoes everything below it.
+    if any(
+        phrase in lowered and _negated(lowered, phrase) for phrase in HANGUP_PHRASES
+    ):
+        return False
     if any(phrase in lowered for phrase in DONE_PHRASES):
         return True
     words = re.findall(r"[a-z']+", lowered)
@@ -339,8 +385,9 @@ class ReceptionistAgent(Agent):
                 f"then pick from: {options}."
             )
         return (
-            f"'{name}' does not match a department. Do not guess. Ask what they "
-            f"need to be seen about and pick from: {options}."
+            f"'{name}' does not match a department. Do not guess. If they told you "
+            f"earlier in this call which one they wanted, pass that. Otherwise ask "
+            f"what they need to be seen about and pick from: {options}."
         )
 
     def _resolve_timezone(self, spoken: str):

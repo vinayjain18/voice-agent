@@ -757,3 +757,89 @@ async def test_variations_of_no_all_close_the_call(agent):
         "nothing else", "that's it", "nahi", "no I'm good", "all good thanks",
     ):
         assert caller_sounds_finished(answer) is True, answer
+
+
+# --- Regressions from the first real call, 2026-09-11 --------------------------
+
+
+def test_prompt_answers_availability_questions_without_taking_a_name(rendered):
+    """The bug from the first real call.
+
+    The caller asked when the dentist was free, four times. The agent asked for
+    their name every time and never called check_availability, because the
+    prompt listed the name first and framed the tool as a booking step.
+    """
+    assert "When someone asks what's available" in rendered
+    assert "Answer the question. Do not ask for their name first" in rendered
+    assert "A name is needed to *save* a booking, not to *look one up*" in rendered
+    assert "If they have asked the same question twice, you have already got it wrong" in rendered
+
+
+def test_prompt_orders_the_booking_flow_department_first(rendered):
+    """Name last. Asking for it first is what stalled the call."""
+    assert "work out the department, find a time they're happy with, then take their name" in rendered
+    # In the numbered steps, department and availability both come before the name.
+    assert rendered.index("1. Which department they need") < rendered.index(
+        "2. Call check_availability"
+    ) < rendered.index("3. Once they pick one, take their name")
+
+
+def test_the_failed_exchange_is_kept_as_a_counter_example(rendered):
+    assert 'when is the doctor available?" and you say "May I have your name' in rendered
+    assert "four times in a row, and the caller gave up" in rendered
+
+
+def test_prompt_shows_a_worked_availability_first_dialogue(rendered):
+    assert "[call check_availability for dentistry]" in rendered
+
+
+def test_the_stiff_name_request_is_banned(rendered):
+    """"May I have your name, please?" is what it actually said on the call."""
+    assert 'Never "May I have your name, please?"' in rendered
+    assert "Can I take your name?" in rendered
+
+
+def test_an_explicit_request_to_hang_up_ends_the_call():
+    """The caller said "Cut the call." twice and was asked "anything else?" twice."""
+    from voice_agent.agents.receptionist import caller_sounds_finished
+
+    for said in (
+        "Cut the call.",
+        "cut the call",
+        "please cut the call",
+        "can you hang up",
+        "end the call please",
+        "sorry, could you just cut the call please",
+        "disconnect me",
+    ):
+        assert caller_sounds_finished(said) is True, said
+
+
+def test_a_negated_hangup_request_does_not_end_the_call():
+    """"Don't cut the call" is the opposite instruction."""
+    from voice_agent.agents.receptionist import caller_sounds_finished
+
+    for said in (
+        "don't cut the call",
+        "do not hang up",
+        "no need to end the call",
+        "please don't cut the call",
+    ):
+        assert caller_sounds_finished(said) is False, said
+
+
+def test_a_long_hangup_request_still_ends_the_call():
+    """The eight word limit applies to "no thanks", not to a direct instruction."""
+    from voice_agent.agents.receptionist import caller_sounds_finished
+
+    said = "okay well thanks very much for your help but please cut the call now"
+    assert len(said.split()) > 8
+    assert caller_sounds_finished(said) is True
+
+
+async def test_end_call_accepts_an_explicit_hangup(agent):
+    ctx = _run_context_with_last_user_turn("Cut the call.")
+    result = await agent.end_call(ctx)
+
+    assert "Not yet" not in result
+    assert ctx.speech_handle.add_done_callback.called is True
