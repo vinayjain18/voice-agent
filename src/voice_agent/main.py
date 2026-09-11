@@ -32,6 +32,7 @@ from voice_agent.observability import (
     attach_metrics_logging,
     log_session_summary,
 )
+from voice_agent.observability.interruption import watch_interruption_fallback
 from voice_agent.observability.summary import infer_outcome, summarise_call
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
@@ -122,6 +123,9 @@ async def entrypoint(ctx: JobContext) -> None:
     # Reuse the VAD loaded in setup() so the model load stays off the critical
     # path of this call.
     session = build_session(settings, vad=ctx.proc.userdata.get("vad"))
+    # Per call, not per process: a worker handles many calls in one process, and
+    # one call losing adaptive interruption says nothing about the next.
+    interruption_watch = watch_interruption_fallback()
     if settings.log_metrics:
         attach_metrics_logging(session)
     if settings.log_transcript:
@@ -186,6 +190,10 @@ async def entrypoint(ctx: JobContext) -> None:
                         }
                         for item in (cost.items if cost else [])
                     ],
+                    # True means the call ran the rest of its turns on VAD
+                    # interruption alone. Worth knowing before blaming the
+                    # agent for talking over someone.
+                    "adaptive_interruption_lost": interruption_watch.degraded,
                 },
             )
 
@@ -228,6 +236,8 @@ async def entrypoint(ctx: JobContext) -> None:
             cost=cost,
             room=ctx.room.name,
         )
+
+        logging.getLogger("livekit.agents").removeFilter(interruption_watch)
 
     ctx.add_shutdown_callback(_on_shutdown)
 

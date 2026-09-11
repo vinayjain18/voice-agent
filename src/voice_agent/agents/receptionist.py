@@ -220,6 +220,12 @@ DONE_PHRASES = (
 
 MAX_CLOSING_ANSWER_WORDS = 8
 
+# How close two committed user turns have to be to count as one sentence that
+# got split. The two seen on real calls were 42ms and 1.3s apart. Beyond this a
+# turn the agent never answered means something else went wrong, and stitching
+# two distant sentences together would invent a turn nobody spoke.
+SPLIT_TURN_WINDOW_SECONDS = 2.0
+
 # A direct instruction to hang up, which is not the same as answering "no" to
 # "anything else?". A real call had the caller say "Cut the call." twice and the
 # agent answer "Anything else I can help you with?" both times.
@@ -352,6 +358,16 @@ class ReceptionistAgent(Agent):
         # no longer ask the job context who was on the line.
         self.caller_number = ""
         self.last_booking: Appointment | None = None
+        # Which turn each slot was first named to the caller on. Tool results
+        # and the spoken reply are one generation, so a time a tool produced
+        # this turn has not reached the caller yet and cannot have been agreed
+        # to. See `book_appointment`.
+        self._turn = 0
+        self._offered: dict[datetime, int] = {}
+        # When the last user turn was let through, for spotting a split turn.
+        # Seeded at construction so the first turn of a call has a real gap to
+        # measure against rather than the epoch.
+        self._last_turn_at = clock.monotonic()
         self._goodbye_instructions = (
             OUTBOUND_GOODBYE if self.outbound else INBOUND_GOODBYE
         )
@@ -376,6 +392,47 @@ class ReceptionistAgent(Agent):
         if is_noise_turn(text):
             logger.info("ignoring a user turn with no speech in it: %r", text)
             raise StopResponse()
+        self._merge_with_unanswered_turn(turn_ctx, new_message, text)
+        self._last_turn_at = clock.monotonic()
+        # Only a turn the caller actually spoke moves the clock on. A dropped
+        # noise turn means they have still not answered what was last offered.
+        self._turn += 1
+
+    def _merge_with_unanswered_turn(
+        self, turn_ctx: ChatContext, new_message: ChatMessage, text: str
+    ) -> None:
+        """Fold the turn before this one into it when we never answered it.
+
+        One sentence can commit as two turns. Deepgram ends the turn on a pause,
+        and the library then flushes the VAD so a wrong end-of-turn can be
+        corrected (`audio_recognition.py:1320`); the flushed segment runs its
+        own end-of-turn detection (`:1440`) and commits. Both messages reach the
+        model, and it answers the first. On a real call "Okay." and "So is nine
+        thirty the last slot?" arrived 42ms apart, the agent took the "Okay." as
+        agreement, and the booking was never saved.
+
+        A user message still sitting at the end of the context means the agent
+        has not replied to it, so the caller said both halves before hearing
+        anything back. Merging is what they actually said. Nothing is dropped:
+        both halves go to the model as one turn.
+        """
+        items = getattr(turn_ctx, "items", None)
+        if not items:
+            return
+        orphan = items[-1]
+        if getattr(orphan, "role", None) != "user":
+            return
+        if clock.monotonic() - self._last_turn_at > SPLIT_TURN_WINDOW_SECONDS:
+            return
+        said = (orphan.text_content or "").strip()
+        if not said:
+            return
+
+        new_message.content = [f"{said} {text}".strip()]
+        # This generation should see one turn, not two. The copy handed to this
+        # hook is per-generation, so the agent's own history keeps both halves.
+        items.remove(orphan)
+        logger.info("merged a split user turn: %r + %r", said, text)
 
     def _resolve_department(self, name: str) -> Department | str:
         """The department the caller means, or what to ask them."""
@@ -413,9 +470,17 @@ class ReceptionistAgent(Agent):
         return tz
 
     def _offers(self, slots: list[datetime]) -> str:
-        """Slot times as the agent will say them: always in the clinic's zone."""
+        """Slot times as the agent will say them: always in the clinic's zone.
+
+        Every slot this renders is one the agent may read out, so this is the
+        single point where a time becomes offerable. `setdefault` keeps the
+        turn it was FIRST offered on: re-checking a slot the caller already
+        accepted must not look like a fresh offer.
+        """
         tz = self.schedule.tz
         today = datetime.now(tz).date()
+        for slot in slots:
+            self._offered.setdefault(slot, self._turn)
         return ", ".join(speak_slot(slot, tz=tz, today=today) for slot in slots)
 
     def _hours_note(self, department: Department, day: date | None) -> str:
@@ -501,8 +566,9 @@ class ReceptionistAgent(Agent):
             department: Which department they need, for example "dentistry",
                 "eye care" or "family medicine". Work it out from what they say
                 they need. Ask if it is not clear; do not guess.
-            day: The day to check, as YYYY-MM-DD. Leave empty for the soonest
-                times on any day.
+            day: The day to check, as YYYY-MM-DD. Leave empty only when they
+                have not said which day. Never pass a time without one: a time
+                with no day cannot be checked against our hours.
             time: The time of day they asked for, as 24-hour HH:MM, if they
                 named one. ALWAYS pass this when they do: it is what decides
                 which slots you are shown. Without it you get the first few of
@@ -608,6 +674,20 @@ class ReceptionistAgent(Agent):
                 f"{self._hours_note(target, wanted)} Offer two, not all."
             )
 
+        # A time with no date is not an instant, so nothing below can check it
+        # against opening hours: `_closed_note` only runs on the dated branch.
+        # A real call left that gap and the model filled it itself. Given "five
+        # PM IST" and our hours, it announced that five PM IST was after hours
+        # because we close at five. It is half seven in the morning here.
+        if time.strip():
+            return (
+                f"They said a time but not a day, so '{time}' cannot be placed "
+                f"against our hours yet. Ask which day they mean, then call this "
+                f"again with the date, the same time and the same timezone. Do "
+                f"not tell them whether their time works until you have, and do "
+                f"not work it out yourself."
+            )
+
         soonest = next_available(
             self.schedule,
             target,
@@ -647,6 +727,11 @@ class ReceptionistAgent(Agent):
 
         Call this once you have the caller's name, the department, a day AND a
         time, and only after check_availability confirmed that time is free.
+
+        Only save a time you have already said out loud and they have agreed
+        to. Checking a time and saving it in the same reply is wrong: they have
+        not heard it yet, so there is nothing for them to have agreed to. Offer
+        it, wait for their answer, then call this.
 
         Never ask for a phone number or an email. We already have the caller's
         number from the call itself and it is recorded automatically.
@@ -700,6 +785,17 @@ class ReceptionistAgent(Agent):
             return (
                 f"{time} is not one of the appointment times in {target.name}. Call "
                 "check_availability and offer a time it gives you."
+            )
+
+        # A real call checked "is ten not available?", saved ten, and only then
+        # asked "shall I book that for you?". The caller had not heard the time
+        # yet, let alone agreed to it: a tool result and the reply it feeds are
+        # one generation. So a slot this turn's own availability check produced
+        # is not bookable until they have answered.
+        if self._offered.get(slot) == self._turn:
+            return (
+                "Do not save yet - they have not heard that time from you. Say it "
+                "out loud, wait for them to agree, then call this again."
             )
 
         room_name, caller = _call_identity()

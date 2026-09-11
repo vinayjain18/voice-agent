@@ -100,3 +100,63 @@ async def test_summary_still_logged_if_transcripts_are_off(monkeypatch, caplog, 
         await callback()
     assert "SESSION SUMMARY" in caplog.text
     assert not (tmp_path / "transcripts").exists()
+
+
+# ---------------------------------------------------------------------------
+# The silent downgrade from adaptive interruption to plain VAD
+# ---------------------------------------------------------------------------
+
+
+async def _run_call_without_a_sheet():
+    """The entrypoint with the appointment store out of the way.
+
+    These tests are about logging, and the suite makes no network calls.
+    """
+    from voice_agent import main
+
+    with patch.object(main, "build_store", return_value=None):
+        return await _run_entrypoint()
+
+
+def _sdk_filters():
+    import logging
+
+    from voice_agent.observability.interruption import InterruptionFallbackWatch
+
+    return [
+        f
+        for f in logging.getLogger("livekit.agents").filters
+        if isinstance(f, InterruptionFallbackWatch)
+    ]
+
+
+async def test_a_call_that_lost_adaptive_interruption_says_so_in_the_transcript(tmp_path):
+    """The whole wiring in one call, because each of these runs a real
+    entrypoint and they are the heaviest tests in the suite.
+
+    Installed for this call, still watching while it runs, recorded in the
+    transcript, and taken off the process-wide logger at the end.
+    """
+    import logging
+
+    from voice_agent.observability.interruption import FALLBACK_MESSAGE
+
+    callback, _ = await _run_call_without_a_sheet()
+    assert len(_sdk_filters()) == 1, "the entrypoint did not start watching"
+
+    _sdk_filters()[0].filter(
+        logging.LogRecord(
+            name="livekit.agents",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg=FALLBACK_MESSAGE + ", falling back to VAD-based interruption",
+            args=(),
+            exc_info=None,
+        )
+    )
+    await callback()
+
+    saved = json.loads(next((tmp_path / "transcripts").glob("*.json")).read_text())
+    assert saved["adaptive_interruption_lost"] is True
+    assert _sdk_filters() == [], "the watch outlived the call"

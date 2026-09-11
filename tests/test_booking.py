@@ -1303,3 +1303,207 @@ async def test_the_cancel_tool_does_not_ask_for_a_rebook(agent):
 
     assert "Do not offer them another time" in result
     assert "offer once to book another time" not in result
+
+
+# ---------------------------------------------------------------------------
+# Consent: a slot the caller has not heard yet cannot be saved
+# ---------------------------------------------------------------------------
+
+
+def _caller_says(text: str):
+    from livekit.agents import ChatMessage
+
+    return ChatMessage(role="user", content=[text])
+
+
+@pytest.mark.asyncio
+async def test_booking_refuses_a_slot_first_seen_in_this_same_turn(agent, sheet):
+    """The real call: asked "is ten not available?", saved it, then asked.
+
+    Tool results and the spoken reply are one generation, so a time a tool
+    named this turn has not reached the caller yet. They cannot have agreed to
+    it, and a booking they never heard is a row nobody can account for.
+    """
+    from livekit.agents import ChatContext
+
+    slot = next_open_slot()
+    await agent.on_user_turn_completed(ChatContext(), _caller_says("is ten not available?"))
+    await agent.check_availability(None, DEPARTMENT, day=local(slot)['date'], time=local(slot)['time'])
+
+    result = await agent.book_appointment(
+        None, department=DEPARTMENT, name="Asha", **local(slot)
+    )
+
+    assert "Do not save yet" in result
+    assert "agree" in result
+    assert rows(sheet) == []
+
+
+@pytest.mark.asyncio
+async def test_booking_goes_through_once_the_caller_has_answered(agent, sheet):
+    """Offered on one turn, accepted on the next. The ordinary path."""
+    from livekit.agents import ChatContext
+
+    slot = next_open_slot()
+    await agent.on_user_turn_completed(ChatContext(), _caller_says("what have you got?"))
+    await agent.check_availability(None, DEPARTMENT, day=local(slot)['date'], time=local(slot)['time'])
+    await agent.on_user_turn_completed(ChatContext(), _caller_says("ten works, I'm Asha"))
+
+    result = await agent.book_appointment(
+        None, department=DEPARTMENT, name="Asha", **local(slot)
+    )
+
+    assert "Saved" in result
+    assert len(rows(sheet)) == 1
+
+
+@pytest.mark.asyncio
+async def test_re_checking_an_already_offered_slot_does_not_block_the_booking(agent, sheet):
+    """Offered last turn, re-verified this turn before saving. Still fine.
+
+    The gate is about when the caller first heard the time, not about when the
+    tool last ran.
+    """
+    from livekit.agents import ChatContext
+
+    slot = next_open_slot()
+    await agent.on_user_turn_completed(ChatContext(), _caller_says("any time Tuesday?"))
+    await agent.check_availability(None, DEPARTMENT, day=local(slot)['date'], time=local(slot)['time'])
+    await agent.on_user_turn_completed(ChatContext(), _caller_says("yes, that one"))
+    await agent.check_availability(None, DEPARTMENT, day=local(slot)['date'], time=local(slot)['time'])
+
+    result = await agent.book_appointment(
+        None, department=DEPARTMENT, name="Asha", **local(slot)
+    )
+
+    assert "Saved" in result
+    assert len(rows(sheet)) == 1
+
+
+# ---------------------------------------------------------------------------
+# A time with no day: the tool must not drop it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_time_with_no_day_asks_for_the_day_rather_than_dropping_it(agent):
+    """"Today at five PM IST" arrived with no date, so nothing checked it.
+
+    The tool returned the hours and nothing else, and the model filled the gap
+    itself: it said five PM IST was after hours because we close at five. Five
+    PM IST is half seven in the morning here.
+    """
+    result = await agent.check_availability(
+        None, "eye care", time="17:00", timezone="IST"
+    )
+
+    assert "which day" in result.lower()
+    assert "Do not tell them whether" in result
+    assert "5pm" not in result.replace("8:30am to 5pm", "")
+
+
+@pytest.mark.asyncio
+async def test_a_day_with_no_time_still_asks_what_time_of_day(agent):
+    """The existing no-day behaviour is untouched."""
+    result = await agent.check_availability(None, "eye care")
+
+    assert "Do not read times out yet" in result
+    assert "which day suits them" in result
+
+
+def test_the_booking_tool_states_the_consent_condition():
+    """The schema is the only place the model sees the rule before it acts.
+
+    The gate in the code refuses a same-turn save, but a refusal costs a turn.
+    Saying the condition here is what stops it being reached.
+    """
+    doc = ReceptionistAgent.book_appointment.__doc__ or ""
+    assert "agreed" in doc
+    assert "same reply" in doc
+
+
+def test_the_availability_tool_asks_for_a_day_whenever_a_time_is_given():
+    doc = " ".join((ReceptionistAgent.check_availability.__doc__ or "").split())
+    assert "cannot be checked against our hours" in doc
+
+
+# ---------------------------------------------------------------------------
+# One sentence split into two committed turns
+# ---------------------------------------------------------------------------
+
+
+def _ctx(*items):
+    """A chat context ending in the given (role, text) pairs."""
+    from livekit.agents import ChatContext
+
+    ctx = ChatContext.empty()
+    for role, text in items:
+        ctx.add_message(role=role, content=[text])
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_a_fragment_merges_with_the_user_turn_the_agent_never_answered(agent):
+    """The turn split that cost a real booking.
+
+    Deepgram ended the turn on a pause, the library flushed the VAD, and both
+    the flushed segment and the next one committed. Two user messages landed
+    half a second apart and the agent answered the first: it heard "Okay." as
+    agreement, announced the slot, and the question went unanswered.
+    """
+    turn_ctx = _ctx(
+        ("assistant", "I have nine thirty available, or eight thirty. Which suits?"),
+        ("user", "Okay."),
+    )
+    message = _caller_says("So is nine thirty the last slot?")
+
+    await agent.on_user_turn_completed(turn_ctx, message)
+
+    assert message.text_content == "Okay. So is nine thirty the last slot?"
+    assert [item.text_content for item in turn_ctx.items] == [
+        "I have nine thirty available, or eight thirty. Which suits?"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_agent_already_answered_is_left_alone(agent):
+    """The ordinary case: they replied to something we said. No merge."""
+    turn_ctx = _ctx(
+        ("user", "I need the dentist"),
+        ("assistant", "Which day suits you?"),
+    )
+    message = _caller_says("Tomorrow morning")
+
+    await agent.on_user_turn_completed(turn_ctx, message)
+
+    assert message.text_content == "Tomorrow morning"
+    assert len(turn_ctx.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_old_unanswered_turn_is_not_merged(agent):
+    """A split arrives within a second. Anything slower is a different fault,
+    and stitching two distant sentences together would invent a turn nobody
+    spoke."""
+    import time
+
+    turn_ctx = _ctx(("assistant", "Which suits?"), ("user", "Okay."))
+    agent._last_turn_at = time.monotonic() - 30
+    message = _caller_says("Actually, can I ask about parking?")
+
+    await agent.on_user_turn_completed(turn_ctx, message)
+
+    assert message.text_content == "Actually, can I ask about parking?"
+    assert len(turn_ctx.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_merged_turn_advances_the_turn_counter_once(agent):
+    """The consent gate counts turns, so merging must not skip the increment
+    or add a second one."""
+    turn_ctx = _ctx(("assistant", "Which suits?"), ("user", "Okay."))
+    before = agent._turn
+
+    await agent.on_user_turn_completed(turn_ctx, _caller_says("is that the last one?"))
+
+    assert agent._turn == before + 1
