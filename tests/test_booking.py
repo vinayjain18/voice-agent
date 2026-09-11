@@ -14,6 +14,7 @@ from voice_agent.agents.receptionist import ReceptionistAgent, build_prompt_vari
 from voice_agent.business import load_profile
 from voice_agent.config import Settings
 from voice_agent.prompts import render_prompt
+from voice_agent.scheduling import hours_for
 from voice_agent.storage.appointments import COLUMNS, AppointmentStore
 
 UTC = ZoneInfo("UTC")
@@ -843,3 +844,66 @@ async def test_end_call_accepts_an_explicit_hangup(agent):
 
     assert "Not yet" not in result
     assert ctx.speech_handle.add_done_callback.called is True
+
+
+# --- Regressions from the second real call, 2026-09-11 -------------------------
+
+
+@pytest.mark.asyncio
+async def test_availability_results_carry_the_departments_opening_hours(agent):
+    """The bug from the second real call.
+
+    "When is he available?" means "what hours does he work", but the model
+    reads it as a booking step and calls check_availability. It answered with
+    two slot times five times running while the caller kept rephrasing, then
+    hung up. The hours now ride along on every availability result, so either
+    reading of the question can be answered from one tool call.
+    """
+    result = await agent.check_availability(None, DEPARTMENT)
+
+    hours = hours_for(agent.schedule, agent.schedule.department(DEPARTMENT))
+    assert hours in result
+    assert "if they asked what hours we keep" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_hours_ride_along_on_a_specific_day_too(agent):
+    tomorrow = datetime.now(UTC).date() + timedelta(days=1)
+    result = await agent.check_availability(
+        None, DEPARTMENT, day=tomorrow.strftime("%Y-%m-%d")
+    )
+
+    hours = hours_for(agent.schedule, agent.schedule.department(DEPARTMENT))
+    assert hours in result
+
+
+def test_prompt_separates_the_hours_question_from_the_slots_question(rendered):
+    assert "Two different questions, two different answers" in rendered
+    assert "usually means **what hours does he work**" in rendered
+    assert "give the hours first and then offer times" in rendered
+    assert "Never answer a third time with the same two slot times" in rendered
+
+
+def test_the_worked_example_answers_availability_with_the_hours(rendered):
+    """Constraint 21: an example that breaks a rule beats the rule.
+
+    This example used to answer "when is he available?" with two slot times,
+    which is precisely the failure. The model was copying it faithfully.
+    """
+    asked = rendered.index("Caller: Can you tell me when he's available?")
+    answer = rendered[asked : asked + 260]
+    assert "He's in Monday to Friday" in answer
+    assert "seven in the morning to half five" in answer
+
+
+def test_prompt_keeps_the_repeated_slot_times_as_a_counter_example(rendered):
+    assert "five times over, and the caller hung up on you" in rendered
+    assert "in which duration is he available?" in rendered
+    assert "not how long a visit lasts" in rendered
+
+
+def test_prompt_skips_the_anything_else_ritual_on_an_explicit_hangup(rendered):
+    """The agent answered "Anything else I can help you with?" to "cut the call"."""
+    assert "**Unless they asked you to hang up.**" in rendered
+    assert "do not ask them to confirm" in rendered
+    assert 'Caller says "cut the call" and you say "Anything else' in rendered

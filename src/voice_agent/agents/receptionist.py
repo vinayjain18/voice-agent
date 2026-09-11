@@ -412,6 +412,21 @@ class ReceptionistAgent(Agent):
         today = datetime.now(tz).date()
         return ", ".join(speak_slot(slot, tz=tz, today=today) for slot in slots)
 
+    def _hours_note(self, department: Department) -> str:
+        """The department's opening hours, carried on every availability result.
+
+        "When is the doctor available?" is a question about opening hours, but
+        the model reads it as a booking step and calls check_availability. On a
+        real call it answered with two slot times five times running while the
+        caller kept rephrasing. Shipping the hours alongside the slots means
+        either reading of the question can be answered from one tool result.
+        """
+        return (
+            f"{hours_for(self.schedule, department)} Say that if they asked what "
+            f"hours we keep or when someone works. If they asked what is free, "
+            f"offer two of the times above, not all."
+        )
+
     @function_tool
     async def get_business_hours(self, context: RunContext, department: str = "") -> str:
         """Return opening hours.
@@ -521,12 +536,12 @@ class ReceptionistAgent(Agent):
                     )
                 return (
                     f"{target.name} is full on {wanted.strftime('%A %d %B')}. Say so, "
-                    f"then offer these instead: {self._offers(fallback, tz)}. Offer "
-                    "two of them, do not list them all."
+                    f"then offer these instead: {self._offers(fallback, tz)}. "
+                    f"{self._hours_note(target)}"
                 )
             return (
                 f"{target.name} on {wanted.strftime('%A %d %B')}: "
-                f"{self._offers(free[:MAX_OFFERS], tz)}. Offer two of these, not all."
+                f"{self._offers(free[:MAX_OFFERS], tz)}. {self._hours_note(target)}"
             )
 
         soonest = next_available(
@@ -544,7 +559,7 @@ class ReceptionistAgent(Agent):
             )
         return (
             f"Soonest free in {target.name}: {self._offers(soonest, tz)}. "
-            "Offer two of these, not all."
+            f"{self._hours_note(target)}"
         )
 
     @function_tool
