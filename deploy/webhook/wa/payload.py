@@ -39,6 +39,11 @@ class WhatsAppCallEvent:
         """A user-initiated call that is ready to be bridged."""
         return self.event == "connect" and self.sdp_type == "offer"
 
+    @property
+    def is_outbound_connect(self) -> bool:
+        """A call the business placed, picked up: Meta sends the SDP answer."""
+        return self.event == "connect" and self.sdp_type == "answer"
+
 
 def parse_call_events(body: dict[str, Any]) -> list[WhatsAppCallEvent]:
     """Extract every call event in the payload. Never raises."""
@@ -55,15 +60,22 @@ def parse_call_events(body: dict[str, Any]) -> list[WhatsAppCallEvent]:
                 session = call.get("session") or {}
                 call_id = call.get("id") or ""
                 sdp = session.get("sdp") or ""
-                if not call_id or not sdp:
-                    # Status-only events (terminate, ringing) carry no SDP.
+                event = call.get("event") or ""
+                if not call_id:
+                    continue
+                # A connect with no SDP cannot be bridged, so it is dropped. A
+                # terminate never carries one, and dropping it too meant a hangup
+                # never reached the release handler: the agent kept talking to an
+                # empty line until LiveKit's own 30 second cleanup. RINGING and
+                # ACCEPTED arrive under `statuses`, not `calls`, so never get here.
+                if not sdp and event != "terminate":
                     continue
                 events.append(
                     WhatsAppCallEvent(
                         call_id=call_id,
                         sdp=sdp,
                         sdp_type=session.get("sdp_type") or "",
-                        event=call.get("event") or "",
+                        event=event,
                         direction=call.get("direction") or "",
                         caller=call.get("from") or "",
                         phone_number_id=phone_number_id,

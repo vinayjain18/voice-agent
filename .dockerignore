@@ -34,6 +34,11 @@ coverage/
 .env
 .env.*
 
+# Google credentials. The agent reads GOOGLE_SERVICE_ACCOUNT_JSON_B64 from its
+# secrets, so the key file must never be baked into the image.
+service-account.json
+*service-account*.json
+
 # VCS, editor, OS
 .git
 .gitignore

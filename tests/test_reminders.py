@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import ClassVar
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -280,3 +282,119 @@ def test_reminders_need_no_timezone_at_all():
     from voice_agent.storage.appointments import due_for_reminder
 
     assert "tz" not in inspect.signature(due_for_reminder).parameters
+
+
+# --- what the WhatsApp channel actually sends ----------------------------------
+#
+# A manual outbound call on 2026-09-13 only rang because it passed the number
+# without a plus and destination_country IN. The reminder channel passed the
+# stored number as-is and hardcoded destination_country US. LiveKit's connector
+# docs: the number "Must include the country code without the leading + sign",
+# and destination_country is "the country where the call terminates".
+
+
+class _RecordingConnector:
+    requests: ClassVar[list] = []
+
+    async def dial_whatsapp_call(self, request):
+        _RecordingConnector.requests.append(request)
+        return SimpleNamespace(whatsapp_call_id="wacid.TEST", room_name=request.room_name)
+
+
+class _RecordingRoomService:
+    updates: ClassVar[list] = []
+    fail: ClassVar[bool] = False
+
+    async def update_room_metadata(self, request):
+        if _RecordingRoomService.fail:
+            raise RuntimeError("room does not exist")
+        _RecordingRoomService.updates.append(request)
+
+
+class _RecordingLiveKitAPI:
+    def __init__(self, *_, **__):
+        self.connector = _RecordingConnector()
+        self.room = _RecordingRoomService()
+
+    async def aclose(self):
+        pass
+
+
+@pytest.fixture
+def dialled(monkeypatch):
+    from voice_agent.reminders import channels
+
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "123")
+    monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "token")
+    monkeypatch.delenv("REMINDER_DESTINATION_COUNTRY", raising=False)
+    _RecordingConnector.requests = []
+    _RecordingRoomService.updates = []
+    _RecordingRoomService.fail = False
+    monkeypatch.setattr(channels.api, "LiveKitAPI", _RecordingLiveKitAPI)
+    return _RecordingConnector.requests
+
+
+async def test_the_number_is_dialled_without_a_plus(dialled):
+    channel = WhatsAppCallChannel(Settings.load())
+
+    assert await channel.send(due_at(30, patient_number="+91 98765 43210")) is True
+    assert dialled[0].whatsapp_to_phone_number == "919876543210"
+
+
+async def test_an_indian_number_terminates_in_india(dialled):
+    await WhatsAppCallChannel(Settings.load()).send(due_at(30, patient_number="+919876543210"))
+    assert dialled[0].destination_country == "IN"
+
+
+async def test_a_us_number_terminates_in_the_us(dialled):
+    await WhatsAppCallChannel(Settings.load()).send(due_at(30, patient_number="+14155550123"))
+    assert dialled[0].destination_country == "US"
+
+
+async def test_an_explicit_destination_country_wins(dialled, monkeypatch):
+    monkeypatch.setenv("REMINDER_DESTINATION_COUNTRY", "GB")
+    await WhatsAppCallChannel(Settings.load()).send(due_at(30, patient_number="+919876543210"))
+    assert dialled[0].destination_country == "GB"
+
+
+async def test_an_unrecognised_prefix_sends_no_country(dialled):
+    """LiveKit documents the field as optional. Guessing a wrong one is worse."""
+    await WhatsAppCallChannel(Settings.load()).send(due_at(30, patient_number="+447700900123"))
+    assert dialled[0].destination_country == ""
+
+
+async def test_the_dispatch_tells_the_agent_it_is_a_reminder(dialled):
+    """Without purpose and booking_ref the agent greets it as an ordinary call."""
+    import json
+
+    await WhatsAppCallChannel(Settings.load()).send(due_at(30, booking_ref="4321"))
+    metadata = json.loads(dialled[0].agents[0].metadata)
+    assert metadata["purpose"] == "reminder"
+    assert metadata["booking_ref"] == "4321"
+
+
+# --- letting the agent hang up a call it placed --------------------------------
+#
+# The agent hangs up the WhatsApp leg with the call id, which it reads at
+# shutdown. Inbound calls carry it as a participant attribute set by the
+# webhook. An outbound call's id only exists once DialWhatsAppCall returns, so
+# on the 2026-09-13 reminder test the agent could not hang up: it ended the
+# session at 10:19:26 UTC and Meta's terminate arrived 24 seconds later.
+
+
+async def test_the_call_id_is_stored_on_the_room_for_the_agent(dialled):
+    import json
+
+    await WhatsAppCallChannel(Settings.load()).send(due_at(30))
+
+    update = _RecordingRoomService.updates[0]
+    assert update.room == dialled[0].room_name
+    assert json.loads(update.metadata) == {"whatsapp_call_id": "wacid.TEST"}
+
+
+async def test_a_failed_metadata_write_does_not_undo_a_placed_call(dialled):
+    """The patient's phone is already ringing. Reporting failure would make the
+    next pass ring them again."""
+    _RecordingRoomService.fail = True
+
+    assert await WhatsAppCallChannel(Settings.load()).send(due_at(30)) is True

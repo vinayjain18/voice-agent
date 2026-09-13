@@ -87,6 +87,8 @@ async def receive(request: Request) -> Response:
     for event in events:
         if event.is_inbound_connect:
             await _accept(event)
+        elif event.is_outbound_connect:
+            await _connect(event)
         elif event.event == "terminate":
             await _release(event)
         else:
@@ -128,13 +130,52 @@ async def _accept(event: WhatsAppCallEvent) -> None:
         await lkapi.aclose()
 
 
+async def _connect(event: WhatsAppCallEvent) -> None:
+    """Finish a call the business placed by handing Meta's SDP answer to LiveKit.
+
+    DialWhatsAppCall only starts the call. When the callee picks up, Meta posts a
+    connect event carrying an SDP answer, and LiveKit's docs say
+    ConnectWhatsAppCall must be called with it immediately, or the callee hears
+    silence and the call drops. This webhook used to log that event as ignored,
+    so no outbound call, reminders included, could ever connect.
+    """
+    lkapi = api.LiveKitAPI()
+    try:
+        logger.info("connecting outbound call id=%s", event.call_id)
+        await lkapi.connector.connect_whatsapp_call(
+            api.ConnectWhatsAppCallRequest(
+                whatsapp_call_id=event.call_id,
+                sdp=SessionDescription(type=event.sdp_type or "answer", sdp=event.sdp),
+            )
+        )
+        logger.info("outbound call %s connected", event.call_id)
+    except Exception:
+        logger.exception("failed to connect outbound call %s", event.call_id)
+    finally:
+        await lkapi.aclose()
+
+
 async def _release(event: WhatsAppCallEvent) -> None:
-    """User hung up: free the LiveKit room instead of waiting out the 30s cleanup."""
+    """Caller hung up: free the LiveKit room instead of waiting out the 30s cleanup.
+
+    LiveKit requires the Meta access token for this disconnect too, and rejects
+    the request without it: `whatsapp api key is required`.
+    """
+    token = _env("WHATSAPP_ACCESS_TOKEN")
+    if not token:
+        logger.warning(
+            "cannot release call %s: WHATSAPP_ACCESS_TOKEN is not set, so the "
+            "room stays up until LiveKit's 30 second cleanup",
+            event.call_id,
+        )
+        return
+
     lkapi = api.LiveKitAPI()
     try:
         await lkapi.connector.disconnect_whatsapp_call(
             api.DisconnectWhatsAppCallRequest(
                 whatsapp_call_id=event.call_id,
+                whatsapp_api_key=token,
                 disconnect_reason=api.DisconnectWhatsAppCallRequest.USER_INITIATED,
             )
         )

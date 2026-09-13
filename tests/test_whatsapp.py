@@ -100,7 +100,7 @@ def test_answer_sdp_is_not_an_inbound_connect():
 
 
 def test_events_without_sdp_are_skipped():
-    """Terminate and status events carry no SDP and must not be accepted."""
+    """A connect with no SDP cannot be bridged, so it is dropped."""
     body = _inbound_payload()
     body["entry"][0]["changes"][0]["value"]["calls"][0].pop("session")
     assert parse_call_events(body) == []
@@ -215,9 +215,22 @@ def test_real_meta_connect_payload_is_accepted():
     assert e.is_inbound_connect
 
 
-def test_real_meta_terminate_payload_is_ignored():
-    """Terminate events carry no session, and must not be treated as a call."""
-    assert parse_call_events(REAL_TERMINATE) == []
+def test_real_meta_terminate_is_parsed_so_the_room_can_be_released():
+    """This used to assert the bug.
+
+    The parser dropped every event without an SDP, and a terminate never has
+    one, so the webhook's release branch never ran on a real call. On a live
+    test on 2026-09-13 Meta's terminate arrived at 14:54:50, was logged as "no
+    actionable call event", and the agent kept talking to an empty line until
+    LiveKit's own 30 second cleanup closed the room at 14:55:20.
+    """
+    events = parse_call_events(REAL_TERMINATE)
+    assert len(events) == 1
+    event = events[0]
+    assert event.event == "terminate"
+    assert event.call_id.startswith("wacid.")
+    assert not event.is_inbound_connect
+    assert not event.is_outbound_connect
 
 
 def test_accept_request_wraps_sdp_in_session_description():
@@ -303,6 +316,49 @@ def test_find_call_id_never_raises_on_a_broken_room():
     assert find_whatsapp_call_id(type("R", (), {"remote_participants": None})()) is None
 
 
+def test_find_call_id_falls_back_to_room_metadata():
+    """Outbound calls: the id only exists once DialWhatsAppCall returns, after the
+    participant was created, so the dialer stores it on the room instead."""
+    from types import SimpleNamespace
+
+    from voice_agent.whatsapp.disconnect import find_whatsapp_call_id
+
+    room = SimpleNamespace(remote_participants={}, metadata='{"whatsapp_call_id": "wacid.OUT"}')
+    assert find_whatsapp_call_id(room) == "wacid.OUT"
+
+
+def test_a_participant_attribute_wins_over_room_metadata():
+    from types import SimpleNamespace
+
+    from voice_agent.whatsapp.disconnect import CALL_ID_ATTRIBUTE, find_whatsapp_call_id
+
+    participant = SimpleNamespace(attributes={CALL_ID_ATTRIBUTE: "wacid.IN"})
+    room = SimpleNamespace(
+        remote_participants={"p": participant},
+        metadata='{"whatsapp_call_id": "wacid.OUT"}',
+    )
+    assert find_whatsapp_call_id(room) == "wacid.IN"
+
+
+def test_unreadable_room_metadata_is_ignored():
+    """Shutdown path: anything unexpected means no id, never an exception."""
+    from types import SimpleNamespace
+
+    from voice_agent.whatsapp.disconnect import find_whatsapp_call_id
+
+    for metadata in ("", "not json", "[1, 2]", '{"other": "x"}', None, '{"whatsapp_call_id": 7}'):
+        room = SimpleNamespace(remote_participants={}, metadata=metadata)
+        assert find_whatsapp_call_id(room) is None, metadata
+
+
+def test_the_dialer_and_the_agent_agree_on_the_key():
+    """The dialer runs on Vercel and cannot import the agent's module."""
+    from voice_agent.reminders.channels import CALL_ID_KEY
+    from voice_agent.whatsapp.disconnect import CALL_ID_ATTRIBUTE
+
+    assert CALL_ID_KEY == CALL_ID_ATTRIBUTE
+
+
 async def test_disconnect_without_token_is_a_clean_no_op():
     """BUSINESS_INITIATED needs the Meta token; missing it must not raise."""
     from voice_agent.whatsapp.disconnect import disconnect_whatsapp_call
@@ -352,3 +408,203 @@ def test_hangup_runs_after_the_transcript_not_before():
         "the WhatsApp hangup must come last, after the closing audio has drained"
     )
     assert "asyncio.sleep(grace)" in body
+
+
+# --- outbound (business-initiated) calls ---------------------------------------
+#
+# When the business dials out, Meta answers with a `connect` event carrying an
+# SDP *answer* and direction BUSINESS_INITIATED. LiveKit's docs: call
+# ConnectWhatsAppCall with it immediately, or the callee hears silence and the
+# call drops. Both webhook copies used to log "ignoring event" and stop.
+
+
+def _outbound_connect_payload(sdp="v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"):
+    body = _inbound_payload(sdp=sdp, sdp_type="answer")
+    call = body["entry"][0]["changes"][0]["value"]["calls"][0]
+    call["direction"] = "BUSINESS_INITIATED"
+    call["from"], call["to"] = "15551983082", "918169796256"
+    return body
+
+
+def test_parses_outbound_connect():
+    event = parse_call_events(_outbound_connect_payload())[0]
+    assert event.is_outbound_connect
+    assert not event.is_inbound_connect
+
+
+def test_an_inbound_offer_is_not_an_outbound_connect():
+    event = parse_call_events(_inbound_payload())[0]
+    assert not event.is_outbound_connect
+
+
+class _FakeConnector:
+    calls: ClassVar[list[tuple[str, object]]] = []
+
+    async def connect_whatsapp_call(self, request):
+        _FakeConnector.calls.append(("connect", request))
+
+    async def accept_whatsapp_call(self, request, **_):
+        _FakeConnector.calls.append(("accept", request))
+
+    async def disconnect_whatsapp_call(self, request):
+        _FakeConnector.calls.append(("disconnect", request))
+
+
+class _FakeLiveKitAPI:
+    def __init__(self, *_, **__):
+        self.connector = _FakeConnector()
+
+    async def aclose(self):
+        pass
+
+
+@pytest.fixture
+def fake_livekit(monkeypatch):
+    from voice_agent.whatsapp import webhook
+
+    _FakeConnector.calls = []
+    monkeypatch.setattr(webhook.api, "LiveKitAPI", _FakeLiveKitAPI)
+    return _FakeConnector.calls
+
+
+def test_outbound_connect_hands_the_answer_to_livekit(client, fake_livekit):
+    body = _outbound_connect_payload(sdp="v=0\r\nanswer-sdp\r\n")
+
+    r = client.post("/webhook", json=body)
+
+    assert r.status_code == 200
+    assert [kind for kind, _ in fake_livekit] == ["connect"]
+    request = fake_livekit[0][1]
+    assert request.whatsapp_call_id == "wacid.TESTCALL"
+    assert request.sdp.type == "answer"
+    assert request.sdp.sdp == "v=0\r\nanswer-sdp\r\n"
+
+
+def test_inbound_connect_still_goes_to_accept(client, fake_livekit):
+    r = client.post("/webhook", json=_inbound_payload())
+
+    assert r.status_code == 200
+    assert [kind for kind, _ in fake_livekit] == ["accept"]
+
+
+def test_both_webhook_copies_connect_outbound_calls():
+    """Constraint 16: the Vercel copy is a second copy and must match."""
+    from pathlib import Path
+
+    for rel in ("src/voice_agent/whatsapp/webhook.py", "deploy/webhook/main.py"):
+        text = (Path(__file__).parent.parent / rel).read_text()
+        assert "connect_whatsapp_call" in text, f"{rel} never connects outbound calls"
+        assert "is_outbound_connect" in text, f"{rel} does not route outbound connects"
+
+
+# --- terminate events must reach the release handler --------------------------
+
+# The call object of Meta's terminate for the outbound test call on 2026-09-13,
+# as logged. The log line was cut at 600 characters, so only the fields that
+# were visible are reproduced here.
+REAL_OUTBOUND_TERMINATE = {
+    "object": "whatsapp_business_account",
+    "entry": [{
+        "id": "2793142004396749",
+        "changes": [{
+            "field": "calls",
+            "value": {
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15551983082",
+                             "phone_number_id": "1208740925666349"},
+                "calls": [{
+                    "id": "wacid.IRggRTY3QTg3NTI0ODdBQzAzMkYxOUIwOUZCNjI3NDY5OUMcGAsxNTU1MTk4MzA4MhUCABUeAA==",
+                    "from": "15551983082", "to": "918169796256",
+                    "event": "terminate", "timestamp": "1789291490",
+                    "direction": "BUSINESS_INITIATED", "start_time": "1789291460",
+                }],
+            },
+        }],
+    }],
+}
+
+# Meta's RINGING update for the same call. Status updates arrive under
+# `statuses`, not `calls`, and must never be treated as a call event.
+REAL_RINGING_STATUS = {
+    "object": "whatsapp_business_account",
+    "entry": [{
+        "id": "2793142004396749",
+        "changes": [{
+            "field": "calls",
+            "value": {
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15551983082",
+                             "phone_number_id": "1208740925666349"},
+                "statuses": [{
+                    "id": "wacid.IRggRTY3QTg3NTI0ODdBQzAzMkYxOUIwOUZCNjI3NDY5OUMcGAsxNTU1MTk4MzA4MhUCABUeAA==",
+                    "status": "RINGING", "timestamp": "1789291449",
+                    "recipient_id": "918169796256", "type": "call",
+                }],
+            },
+        }],
+    }],
+}
+
+
+def test_real_outbound_terminate_is_parsed():
+    events = parse_call_events(REAL_OUTBOUND_TERMINATE)
+    assert [event.event for event in events] == ["terminate"]
+    assert events[0].direction == "BUSINESS_INITIATED"
+
+
+def test_status_updates_are_still_ignored():
+    assert parse_call_events(REAL_RINGING_STATUS) == []
+
+
+def test_terminate_post_releases_the_call(client, fake_livekit):
+    """The whole point: a hangup reaches DisconnectWhatsAppCall."""
+    import livekit.api as lkapi
+
+    r = client.post("/webhook", json=REAL_TERMINATE)
+
+    assert r.status_code == 200
+    assert [kind for kind, _ in fake_livekit] == ["disconnect"]
+    request = fake_livekit[0][1]
+    assert request.whatsapp_call_id == REAL_TERMINATE["entry"][0]["changes"][0]["value"]["calls"][0]["id"]
+    assert request.disconnect_reason == lkapi.DisconnectWhatsAppCallRequest.USER_INITIATED
+
+
+def test_releasing_a_call_sends_the_whatsapp_api_key(client, fake_livekit):
+    """LiveKit rejects a USER_INITIATED disconnect without it:
+    `whatsapp api key is required` (invalid_argument, 400)."""
+    client.post("/webhook", json=REAL_TERMINATE)
+
+    request = fake_livekit[0][1]
+    assert request.whatsapp_api_key == "token"
+
+
+def test_releasing_without_a_token_warns_instead_of_calling(client, fake_livekit, monkeypatch, caplog):
+    """A disconnect LiveKit will reject is not worth sending. Say why instead."""
+    monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "")
+    with caplog.at_level("WARNING"):
+        client.post("/webhook", json=REAL_TERMINATE)
+
+    assert fake_livekit == []
+    assert "WHATSAPP_ACCESS_TOKEN" in caplog.text
+
+
+def test_both_webhook_copies_send_the_key_on_release():
+    """Constraint 16: the Vercel copy must match."""
+    import re
+    from pathlib import Path
+
+    for rel in ("src/voice_agent/whatsapp/webhook.py", "deploy/webhook/main.py"):
+        text = (Path(__file__).parent.parent / rel).read_text()
+        release = re.search(r"async def _release\(.*?(?=\n(?:async )?def )", text, re.DOTALL)
+        assert release, f"{rel} has no _release"
+        assert "whatsapp_api_key=" in release.group(0), f"{rel} releases without the key"
+
+
+def test_both_payload_parsers_are_identical():
+    """Constraint 16: the Vercel copy of the parser must never drift."""
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent
+    source = (root / "src/voice_agent/whatsapp/payload.py").read_text()
+    bundled = (root / "deploy/webhook/wa/payload.py").read_text()
+    assert source == bundled

@@ -66,15 +66,16 @@ environment variable. Every provider is swappable the same way.
   and the LLM starts generating before the caller has finished speaking.
 - **A US-accented English voice out of the box**, and one variable away from
   Hindi and Hinglish with mid-sentence switching.
-- **Books callbacks** into a CSV, with the caller's number captured from the call
-  rather than asked for.
+- **Books, moves and cancels appointments** in a Google Sheet, per department,
+  with the caller's number captured from the call rather than asked for.
+- **Reminds patients** with a WhatsApp call half an hour before an appointment,
+  and moves or cancels it on the same call.
 - **Interruptible.** Talk over it and it stops, like a person would.
 - **Knows when to hang up**, and will not cut a caller off mid-sentence.
 - **Costs are itemised** per call: tokens, characters, audio seconds, and a total.
 - **Everything the agent says is data**, not code. Facts live in JSON, behaviour
   lives in a Markdown prompt.
-- **358 tests**, none of which touch the network, so the suite runs in about a
-  second.
+- **457 tests**, none of which touch the network.
 
 ---
 
@@ -228,13 +229,18 @@ lk agent status
 lk agent logs                              # live logs
 ```
 
-Two things to know:
+Three things to know:
 
-- **Cold starts.** On the free tier an idle agent takes a few seconds to wake, so
-  the first call after a quiet period is slower to answer.
-- **`data/` is ephemeral.** Leads and transcripts written by the hosted agent are
-  lost on restart or redeploy. Send them somewhere durable if you need to keep
-  them.
+- **Cold starts.** On LiveKit's free Build plan a production agent scales to zero
+  once its sessions end, and the next call waits 10 to 20 seconds for it to
+  start. The paid Ship and Scale plans keep production warm. The free plan has
+  no setting to keep a replica warm.
+- **Secrets come from `--secrets-file`.** `.dockerignore` keeps `.env` and
+  `service-account.json` out of the image, so the hosted agent reads storage
+  credentials from `GOOGLE_SERVICE_ACCOUNT_JSON_B64`. Run `lk agent secrets`
+  after a deploy to confirm the names you expect are there.
+- **`data/` is ephemeral.** Transcripts written by the hosted agent are lost on
+  restart or redeploy. Appointments and the call log live in Google Sheets.
 
 ### A real phone number
 
@@ -325,12 +331,63 @@ cd deploy/webhook
 vercel deploy --prod
 ```
 
-Set the four `WHATSAPP_*` variables plus `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
-`LIVEKIT_API_SECRET` as **project-level** environment variables. Variables
+Set the four `WHATSAPP_*` variables plus `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+`LIVEKIT_API_SECRET` and `LIVEKIT_AGENT_NAME` as **project-level** environment
+variables. Variables
 attached to a single deployment do not persist to the next one.
 
 Check it with `GET /` on the deployed URL, which reports whether WhatsApp
 credentials and signature verification are configured.
+
+**Outbound calls**
+
+The agent can also call a patient on WhatsApp. Reminder calls use this.
+
+```
+dialer ──► DialWhatsAppCall ──► Meta rings the patient
+Meta   ──► webhook (connect, SDP answer) ──► ConnectWhatsAppCall ──► agent
+```
+
+`DialWhatsAppCall` only starts the call. When the patient picks up, Meta posts a
+`connect` event carrying an SDP answer, and the webhook passes it straight to
+`ConnectWhatsAppCall`. The deployed webhook has to be running for the patient to
+hear anything.
+
+- The number is dialled as digits with the country code and no `+`.
+- The patient must have given the business call permission. Check it with
+  `GET https://graph.facebook.com/v25.0/{phone-number-id}/call_permissions?user_wa_id=<number>`,
+  which answers `temporary`, `permanent` or `no_permission`.
+- Meta does not let business numbers in the US, Canada, Egypt, Vietnam or
+  Nigeria place business-initiated calls in production. Meta's public test
+  number can place them.
+
+Place one by hand. Both commands check permission and dry-run until you add
+`--yes`, and every real dial counts against Meta's daily call limit:
+
+```bash
+uv run python scripts/dial_whatsapp_test.py 918169796256 --country IN
+uv run python scripts/dial_whatsapp_test.py 918169796256 --reminder <booking_ref>
+```
+
+To test against a local agent instead of the hosted one, give it its own name in
+the shell. A name set in the shell takes precedence over `.env`:
+
+```bash
+LIVEKIT_AGENT_NAME=voice-agent-local lk agent dev
+LIVEKIT_AGENT_NAME=voice-agent-local uv run python scripts/dial_whatsapp_test.py 918169796256 --reminder <booking_ref> --yes
+```
+
+**Hanging up**
+
+Ending the LiveKit room does not end the WhatsApp call, so each side hangs it up
+explicitly, and both need `WHATSAPP_ACCESS_TOKEN`:
+
+- **The agent hangs up** from its shutdown callback with a business-initiated
+  disconnect. It finds Meta's call id on the WhatsApp participant for an inbound
+  call, and in the room metadata for an outbound call, where the dialer stores it
+  as soon as the dial returns.
+- **The caller hangs up**: Meta sends `terminate`, and the webhook issues a
+  user-initiated disconnect so the room is released straight away.
 
 ---
 
@@ -554,8 +611,16 @@ is a reliable way to stop a tool being called too early.
 - **Books, moves and cancels** appointments, confirming the time back in the
   caller's own words rather than converting it, and reading out a four digit
   booking number once.
-- **Finds an existing appointment** from the number the patient is calling on, so
-  cancelling usually needs nothing but a yes.
+- **Finds an existing appointment** from the number the patient is calling on, or
+  from the four digit booking number, so cancelling usually needs nothing but a
+  yes.
+- **Saves only a time the caller has agreed to.** A time it has just found is
+  offered first and booked on their answer.
+- **Keeps two clocks apart.** Every time it says is in the clinic's timezone.
+  When a caller has named their own timezone and gives a time it did not offer,
+  it asks which clock they mean rather than guessing.
+- **On a reminder call** it says which appointment it is calling about and asks
+  whether they can still make it.
 - **Never asks for a phone number or email.** The number comes from the call.
 - **Sends emergencies to emergency services** immediately instead of booking
   them, and gives **no** medical advice of any kind.
@@ -626,6 +691,10 @@ For local development you can skip the encoding and point at the file instead:
 ```
 GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
 ```
+
+The file is only read when `GOOGLE_SERVICE_ACCOUNT_JSON_B64` is unset. It is kept
+out of git and out of the agent's Docker image, so the hosted agent and the
+Vercel webhook use the base64 variable.
 
 ### What the sheet holds
 
@@ -744,21 +813,28 @@ REMINDER_SECRET     the same value as REMINDER_TRIGGER_SECRET
 Run `installTrigger` once and accept the permissions prompt. Check `Executions`
 after a few minutes.
 
-**3. Turn the calls on.** `REMINDER_CHANNEL` defaults to `dry_run`, which logs
-the call it would have placed and marks the reminder sent. The whole pass is
-exercised that way, so you can confirm the timing before anything rings.
+**3. Turn the calls on.** The reminder endpoint needs `APPOINTMENTS_SHEET_ID`,
+`GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `REMINDER_TRIGGER_SECRET` on Vercel.
+`REMINDER_CHANNEL` defaults to `dry_run`, which logs the call it would have
+placed and marks the reminder sent. Set it to `whatsapp_call` to place real
+calls:
 
-```
-REMINDER_CHANNEL=whatsapp_call
+```bash
+vercel env add REMINDER_CHANNEL production --value whatsapp_call
+vercel deploy --prod --cwd deploy/webhook
 ```
 
-> **This needs a WhatsApp business number outside the US, Canada, Egypt, Vietnam
-> and Nigeria.** Meta excludes those from business-initiated calling, and the
-> free test number is a US one. Nothing else about the setup changes.
->
-> Permission is normally automatic: a patient who **rang the clinic** grants
-> temporary call permission for seven days by doing so, which covers any
-> appointment booked within a week.
+A reminder is placed only when:
+
+- the booking has a phone number. Bookings made in terminal or browser mode have
+  none.
+- the patient has given call permission (see **Outbound calls** under WhatsApp).
+- the business number is allowed to place business-initiated calls.
+
+The number is dialled without its `+`. The destination country comes from the
+number, `IN` for 91 and `US` for 1, and `REMINDER_DESTINATION_COUNTRY` overrides
+it. The call id is written to the room as soon as the call is placed, so the
+agent can hang up the WhatsApp call when the conversation ends.
 
 You can trigger a pass by hand:
 
@@ -882,10 +958,14 @@ voice-agent/
 │   │   └── runner.py            One scan: claim, send, record
 │   ├── observability/
 │   │   ├── conversation.py      The conversation log
+│   │   ├── interruption.py      Reports lost adaptive interruption
 │   │   ├── metrics.py           Per-turn latency
 │   │   ├── summary.py           One line saying why they rang
 │   │   └── usage.py             Cost summary
-│   └── whatsapp/                Webhook for local development
+│   └── whatsapp/
+│       ├── webhook.py           Webhook for local development
+│       ├── payload.py           Parses Meta's call events
+│       └── disconnect.py        Hangs up the WhatsApp leg
 ├── deploy/
 │   ├── webhook/                 Self-contained webhook + reminder endpoint
 │   │   └── voice_agent/         Generated copy, see scripts/sync_webhook_bundle.py
@@ -893,8 +973,9 @@ voice-agent/
 ├── livekit/                     Dispatch rule and trunk config
 ├── scripts/
 │   ├── make_call.py             Place an outbound call
+│   ├── dial_whatsapp_test.py    Place one outbound WhatsApp or reminder call
 │   └── sync_webhook_bundle.py   Refresh the Vercel copy
-├── tests/                       358 tests, no network calls
+├── tests/                       457 tests, no network calls
 └── .env.example                 Every setting, documented
 ```
 
@@ -911,7 +992,7 @@ touching `storage/` or `reminders/`. A test enforces each of the three.
 
 ```bash
 uv sync                  # install
-uv run pytest            # 358 tests, about seven seconds, no network calls
+uv run pytest            # 457 tests, about ten seconds, no network calls
 uv run ruff check .      # lint
 ```
 
@@ -950,12 +1031,20 @@ the guards on when to hang up, and the accounting.
 
 ## Limitations
 
-- **Hosted `data/` is ephemeral.** Leads captured by a cloud-deployed agent are
-  lost on redeploy. Write them to an external store if you need to keep them.
+- **Hosted `data/` is ephemeral.** Transcripts written by a cloud-deployed agent
+  are lost on redeploy. Appointments and the call log are in Google Sheets.
 - **Indian languages beyond Hindi are not supported.** Deepgram Flux covers
   Hindi; Tamil, Telugu, Marathi and Bengali would need a different speech model.
 - **The WhatsApp webhook is duplicated** between local and deployment copies, so
-  changes must be applied twice. A test checks they agree on call teardown.
+  changes must be applied twice. Tests check that both connect outbound calls and
+  release calls with the access token, and that their payload parsers are
+  identical.
+- **Reminders need a phone number on the booking.** Bookings made in terminal or
+  browser mode have none, so they are never reminded.
+- **Business-initiated WhatsApp calls are limited by Meta.** Business numbers in
+  the US, Canada, Egypt, Vietnam and Nigeria cannot place them in production.
+- **The agent hangs up a few seconds after its goodbye**, once the shutdown
+  callback has written the summary and transcript.
 - **Caller number capture on SIP is best-effort.** The SDK exposes no constant
   for the caller attribute, so the code scans participant attributes for
   something phone-shaped. The WhatsApp path passes the call id explicitly.

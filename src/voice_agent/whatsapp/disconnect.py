@@ -13,6 +13,7 @@ continue to run unnecessarily."
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -23,7 +24,15 @@ CALL_ID_ATTRIBUTE = "whatsapp_call_id"
 
 
 def find_whatsapp_call_id(room: Any) -> str | None:
-    """Read Meta's call id off the connector participant, if this is a WhatsApp call."""
+    """Meta's call id for this room, if it is a WhatsApp call.
+
+    Inbound calls carry it as a participant attribute, set by the webhook when it
+    accepts the call. An outbound call cannot: its id only exists once
+    DialWhatsAppCall returns, after the participant was already created. So the
+    dialer writes it into the room's metadata instead, and this falls back to
+    that. Without it the agent could not hang up a call it placed, and the
+    patient sat in silence until LiveKit's own cleanup.
+    """
     try:
         for participant in (room.remote_participants or {}).values():
             attributes = dict(getattr(participant, "attributes", {}) or {})
@@ -32,7 +41,19 @@ def find_whatsapp_call_id(room: Any) -> str | None:
                 return str(call_id)
     except Exception:
         logger.debug("could not read whatsapp call id", exc_info=True)
-    return None
+    return _call_id_from_room_metadata(room)
+
+
+def _call_id_from_room_metadata(room: Any) -> str | None:
+    """The id the dialer stored on the room. Never raises: this runs at shutdown."""
+    try:
+        parsed = json.loads(getattr(room, "metadata", "") or "")
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    call_id = parsed.get(CALL_ID_ATTRIBUTE)
+    return call_id if isinstance(call_id, str) and call_id else None
 
 
 async def disconnect_whatsapp_call(call_id: str, api_key: str | None) -> bool:

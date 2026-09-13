@@ -99,6 +99,8 @@ async def receive(request: Request) -> Response:
     for event in events:
         if event.is_inbound_connect:
             await _accept(settings, event)
+        elif event.is_outbound_connect:
+            await _connect(event)
         elif event.event == "terminate":
             # The caller hung up. Telling LiveKit promptly frees the room and
             # stops the agent running for LiveKit's 30 second grace period.
@@ -156,14 +158,55 @@ async def _accept(settings: Settings, event: WhatsAppCallEvent) -> None:
         await lkapi.aclose()
 
 
+async def _connect(event: WhatsAppCallEvent) -> None:
+    """Finish a call the business placed by handing Meta's SDP answer to LiveKit.
+
+    DialWhatsAppCall only starts the call. When the callee picks up, Meta posts a
+    connect event carrying an SDP answer, and LiveKit's docs say
+    ConnectWhatsAppCall must be called with it immediately, or the callee hears
+    silence and the call drops. This webhook used to log that event as ignored,
+    so no outbound call, reminders included, could ever connect.
+    """
+    lkapi = api.LiveKitAPI()
+    try:
+        logger.info("connecting outbound WhatsApp call id=%s", event.call_id)
+        await lkapi.connector.connect_whatsapp_call(
+            api.ConnectWhatsAppCallRequest(
+                whatsapp_call_id=event.call_id,
+                # A SessionDescription message, not a raw string (constraint 15).
+                sdp=SessionDescription(type=event.sdp_type or "answer", sdp=event.sdp),
+            )
+        )
+        logger.info("outbound WhatsApp call %s connected", event.call_id)
+    except Exception:
+        # Never let this bubble up: Meta would retry the webhook, and the callee
+        # is already on the line either way.
+        logger.exception("failed to connect outbound WhatsApp call %s", event.call_id)
+    finally:
+        await lkapi.aclose()
+
+
 async def _release(settings: Settings, event: WhatsAppCallEvent) -> None:
-    """Tell LiveKit the user hung up, so it tears the room down immediately."""
+    """Tell LiveKit the caller hung up, so it tears the room down immediately.
+
+    LiveKit requires the Meta access token for this disconnect too, and rejects
+    the request without it: `whatsapp api key is required`.
+    """
+    token = settings.whatsapp.access_token
+    if not token:
+        logger.warning(
+            "cannot release WhatsApp call %s: WHATSAPP_ACCESS_TOKEN is not set, "
+            "so the room stays up until LiveKit's 30 second cleanup",
+            event.call_id,
+        )
+        return
+
     lkapi = api.LiveKitAPI()
     try:
         await lkapi.connector.disconnect_whatsapp_call(
             api.DisconnectWhatsAppCallRequest(
                 whatsapp_call_id=event.call_id,
-                # USER_INITIATED needs no Meta token: nothing is sent to WhatsApp.
+                whatsapp_api_key=token,
                 disconnect_reason=api.DisconnectWhatsAppCallRequest.USER_INITIATED,
             )
         )

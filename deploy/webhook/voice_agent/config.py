@@ -152,7 +152,9 @@ class ReminderSettings:
     # returned to the queue after this long, so a restart resumes it.
     claim_timeout_minutes: int = 10
     ringing_timeout_seconds: int = 30
-    destination_country: str = "US"
+    # Two letter code where a reminder call terminates. Empty means derive it
+    # from the patient's number, which is what an explicit value overrides.
+    destination_country: str = ""
 
 
 @dataclass(frozen=True)
@@ -426,7 +428,7 @@ class Settings:
                 max_attempts=int(_env("REMINDER_MAX_ATTEMPTS", "2")),
                 claim_timeout_minutes=int(_env("REMINDER_CLAIM_TIMEOUT_MINUTES", "10")),
                 ringing_timeout_seconds=int(_env("REMINDER_RINGING_TIMEOUT_SECONDS", "30")),
-                destination_country=_env("REMINDER_DESTINATION_COUNTRY", "US"),
+                destination_country=_env("REMINDER_DESTINATION_COUNTRY", ""),
             ),
             livekit=_livekit_settings(),
             pipeline=PipelineSettings(
