@@ -75,7 +75,7 @@ environment variable. Every provider is swappable the same way.
 - **Costs are itemised** per call: tokens, characters, audio seconds, and a total.
 - **Everything the agent says is data**, not code. Facts live in JSON, behaviour
   lives in a Markdown prompt.
-- **457 tests**, none of which touch the network.
+- **462 tests**, none of which touch the network.
 
 ---
 
@@ -975,7 +975,7 @@ voice-agent/
 │   ├── make_call.py             Place an outbound call
 │   ├── dial_whatsapp_test.py    Place one outbound WhatsApp or reminder call
 │   └── sync_webhook_bundle.py   Refresh the Vercel copy
-├── tests/                       457 tests, no network calls
+├── tests/                       462 tests, no network calls
 └── .env.example                 Every setting, documented
 ```
 
@@ -992,7 +992,7 @@ touching `storage/` or `reminders/`. A test enforces each of the three.
 
 ```bash
 uv sync                  # install
-uv run pytest            # 457 tests, about ten seconds, no network calls
+uv run pytest            # 462 tests, about ten seconds, no network calls
 uv run ruff check .      # lint
 ```
 
@@ -1045,9 +1045,11 @@ the guards on when to hang up, and the accounting.
   the US, Canada, Egypt, Vietnam and Nigeria cannot place them in production.
 - **The agent hangs up a few seconds after its goodbye**, once the shutdown
   callback has written the summary and transcript.
-- **Caller number capture on SIP is best-effort.** The SDK exposes no constant
-  for the caller attribute, so the code scans participant attributes for
-  something phone-shaped. The WhatsApp path passes the call id explicitly.
+- **Caller number capture is best-effort.** The SDK exposes no constant for the
+  caller attribute, so the code scans participant attributes for a key
+  containing `phone`. The WhatsApp webhook sets that key itself, as
+  `phone_number`, alongside the call id; an outbound dial carries the number in
+  the job metadata instead. SIP relies on whatever the trunk happens to send.
 - **Outbound calling depends on your carrier.** Which countries you can dial, and
   what business verification is required first, is set by the carrier and by
   local regulation.
