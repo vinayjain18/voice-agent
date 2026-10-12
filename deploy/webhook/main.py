@@ -97,6 +97,22 @@ async def receive(request: Request) -> Response:
     return Response(status_code=200, content="ok")
 
 
+def _participant_attributes(event: WhatsAppCallEvent) -> dict[str, str]:
+    """What the agent needs to know about whoever is on the line.
+
+    The call id lets it hang up the WhatsApp leg. The number is what a booking
+    is saved against and what a reminder dials, and an inbound call has no other
+    way to carry it: the agent scans participant attributes for a key containing
+    "phone", so that substring is the contract. Meta sends digits with no plus;
+    stored numbers carry one. No caller means no key, because an empty string
+    reads as a real value.
+    """
+    attributes = {"whatsapp_call_id": event.call_id}
+    if event.caller:
+        attributes["phone_number"] = f"+{event.caller.lstrip('+')}"
+    return attributes
+
+
 async def _accept(event: WhatsAppCallEvent) -> None:
     room = f"{_env('WHATSAPP_ROOM_PREFIX', 'whatsapp')}-{uuid.uuid4().hex[:8]}"
     agent_name = _env("LIVEKIT_AGENT_NAME", "voice-agent-demo")
@@ -117,9 +133,10 @@ async def _accept(event: WhatsAppCallEvent) -> None:
                 sdp=SessionDescription(type=event.sdp_type or "offer", sdp=event.sdp),
                 room_name=room,
                 agents=[RoomAgentDispatch(agent_name=agent_name)],
-                # The agent reads this on shutdown to hang up the WhatsApp leg,
-                # not just leave the LiveKit room.
-                participant_attributes={"whatsapp_call_id": event.call_id},
+                # The call id lets the agent hang up the WhatsApp leg on
+                # shutdown, not just leave the LiveKit room. The number is what
+                # the booking is saved against and what a reminder dials.
+                participant_attributes=_participant_attributes(event),
                 wait_until_answered=wait,
             )
         )

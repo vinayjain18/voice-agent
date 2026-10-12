@@ -31,6 +31,13 @@ from voice_agent.whatsapp.payload import WhatsAppCallEvent, parse_call_events
 
 logger = logging.getLogger("voice_agent.whatsapp")
 
+# The caller's own number, handed to the agent as a participant attribute. An
+# inbound WhatsApp call has no other way to carry it: the agent's _call_identity
+# reads outbound numbers from the job metadata, which only a dial sets, and
+# otherwise scans the participant's attributes for a key containing "phone". So
+# the key must keep that substring in it.
+CALLER_NUMBER_ATTRIBUTE = "phone_number"
+
 app = FastAPI(title="WhatsApp call webhook")
 
 
@@ -114,6 +121,19 @@ async def receive(request: Request) -> Response:
     return Response(status_code=200, content="ok")
 
 
+def _participant_attributes(event: WhatsAppCallEvent) -> dict[str, str]:
+    """What the agent needs to know about whoever is on the line.
+
+    Meta sends the caller as digits with no plus; stored numbers carry one, so
+    the plus goes back on here rather than in four places downstream. An absent
+    caller sets no key at all: an empty string reads as a real value.
+    """
+    attributes = {CALL_ID_ATTRIBUTE: event.call_id}
+    if event.caller:
+        attributes[CALLER_NUMBER_ATTRIBUTE] = f"+{event.caller.lstrip('+')}"
+    return attributes
+
+
 async def _accept(settings: Settings, event: WhatsAppCallEvent) -> None:
     """Bridge one inbound call into a LiveKit room with the agent in it."""
     wa = settings.whatsapp
@@ -143,9 +163,10 @@ async def _accept(settings: Settings, event: WhatsAppCallEvent) -> None:
                 sdp=SessionDescription(type=event.sdp_type or "offer", sdp=event.sdp),
                 room_name=room,
                 agents=[RoomAgentDispatch(agent_name=wa.agent_name)],
-                # The agent reads this on shutdown so it can hang up the
-                # WhatsApp leg, not just leave the LiveKit room.
-                participant_attributes={CALL_ID_ATTRIBUTE: event.call_id},
+                # The call id lets the agent hang up the WhatsApp leg on
+                # shutdown, not just leave the LiveKit room. The number is what
+                # the booking is saved against and what a reminder dials.
+                participant_attributes=_participant_attributes(event),
                 wait_until_answered=wa.wait_until_answered,
             )
         )

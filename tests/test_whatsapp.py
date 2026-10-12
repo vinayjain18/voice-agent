@@ -608,3 +608,91 @@ def test_both_payload_parsers_are_identical():
     source = (root / "src/voice_agent/whatsapp/payload.py").read_text()
     bundled = (root / "deploy/webhook/wa/payload.py").read_text()
     assert source == bundled
+
+
+# --- the caller's number must reach the agent ---------------------------------
+
+def test_accept_passes_the_callers_number(client, fake_livekit):
+    """Every inbound WhatsApp booking saved an empty patient_number.
+
+    Meta sends the caller as `from`, the parser reads it, and the webhook used
+    to log it and throw it away: the only participant attribute it set was the
+    call id. The agent has no other source for an inbound call, so the row went
+    in with no number, and a booking with no number is never reminded.
+    """
+    from voice_agent.whatsapp.webhook import CALLER_NUMBER_ATTRIBUTE
+
+    client.post("/webhook", json=_inbound_payload())
+
+    kind, request = fake_livekit[0]
+    assert kind == "accept"
+    attributes = dict(request.participant_attributes)
+    assert attributes[CALLER_NUMBER_ATTRIBUTE] == "+918169796256"
+    # Still the only way the agent can hang the WhatsApp leg up.
+    assert attributes["whatsapp_call_id"] == "wacid.TESTCALL"
+
+
+def test_the_caller_attribute_is_one_the_agent_actually_scans_for():
+    """The agent looks for any attribute whose key contains 'phone'.
+
+    That scan is deliberately loose because the SDK exposes no constant, so the
+    contract between the two sides is this substring and nothing else.
+    """
+    from voice_agent.whatsapp.webhook import CALLER_NUMBER_ATTRIBUTE
+
+    assert "phone" in CALLER_NUMBER_ATTRIBUTE.lower()
+
+
+def test_the_agent_reads_the_attribute_the_webhook_sets():
+    """Both halves of the contract in one test, so neither can drift alone."""
+    from unittest.mock import patch as mock_patch
+
+    from voice_agent.agents.receptionist import _call_identity
+    from voice_agent.whatsapp.webhook import CALLER_NUMBER_ATTRIBUTE
+
+    class Participant:
+        attributes: ClassVar[dict] = {
+            "whatsapp_call_id": "wacid.ABC",
+            CALLER_NUMBER_ATTRIBUTE: "+918169796256",
+        }
+        identity = "wa_participant"
+
+    class Room:
+        name = "whatsapp-abcd1234"
+        remote_participants: ClassVar[dict] = {"p": Participant()}
+
+    class Job:
+        metadata = ""
+
+    class Ctx:
+        room = Room()
+        job = Job()
+
+    with mock_patch("voice_agent.agents.receptionist.get_job_context", return_value=Ctx()):
+        room, caller = _call_identity()
+
+    assert room == "whatsapp-abcd1234"
+    assert caller == "+918169796256"
+
+
+def test_a_call_with_no_caller_sets_no_empty_attribute(client, fake_livekit):
+    """An empty string is worse than an absent key: it reads as a real value."""
+    from voice_agent.whatsapp.webhook import CALLER_NUMBER_ATTRIBUTE
+
+    body = _inbound_payload()
+    body["entry"][0]["changes"][0]["value"]["calls"][0]["from"] = ""
+
+    client.post("/webhook", json=body)
+
+    attributes = dict(fake_livekit[0][1].participant_attributes)
+    assert CALLER_NUMBER_ATTRIBUTE not in attributes
+
+
+def test_both_webhook_copies_pass_the_caller_number():
+    """Constraint 16: the Vercel copy is the one that runs in production."""
+    from pathlib import Path
+
+    for rel in ("src/voice_agent/whatsapp/webhook.py", "deploy/webhook/main.py"):
+        text = (Path(__file__).parent.parent / rel).read_text()
+        assert "phone_number" in text, f"{rel} does not pass the caller number"
+        assert "event.caller" in text, f"{rel} never reads the caller off the event"
