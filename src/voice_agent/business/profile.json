@@ -17,56 +17,186 @@
         "slot_minutes": 15,
         "description": "updating your KYC over a video call with an officer, from wherever you are",
         "weekly": {
-          "monday": [["09:00", "18:00"]],
-          "tuesday": [["09:00", "18:00"]],
-          "wednesday": [["09:00", "18:00"]],
-          "thursday": [["09:00", "18:00"]],
-          "friday": [["09:00", "18:00"]],
-          "saturday": [["09:00", "14:00"]]
+          "monday": [
+            [
+              "09:00",
+              "18:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "09:00",
+              "18:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "09:00",
+              "18:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "09:00",
+              "18:00"
+            ]
+          ],
+          "friday": [
+            [
+              "09:00",
+              "18:00"
+            ]
+          ],
+          "saturday": [
+            [
+              "09:00",
+              "14:00"
+            ]
+          ]
         }
       },
       "branch kyc": {
         "slot_minutes": 15,
         "description": "updating your KYC in person at the branch, with your original documents",
         "weekly": {
-          "monday": [["10:00", "16:00"]],
-          "tuesday": [["10:00", "16:00"]],
-          "wednesday": [["10:00", "16:00"]],
-          "thursday": [["10:00", "16:00"]],
-          "friday": [["10:00", "16:00"]]
+          "monday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "friday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ]
         }
       },
       "account reactivation": {
         "slot_minutes": 15,
         "description": "bringing a dormant or inoperative account back into use",
         "weekly": {
-          "monday": [["10:00", "16:00"]],
-          "tuesday": [["10:00", "16:00"]],
-          "wednesday": [["10:00", "16:00"]],
-          "thursday": [["10:00", "16:00"]],
-          "friday": [["10:00", "16:00"]]
+          "monday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "friday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ]
         }
       },
       "unclaimed deposit claim": {
         "slot_minutes": 15,
         "description": "claiming a deposit left untouched for years, including a claim as a nominee or legal heir",
         "weekly": {
-          "monday": [["10:00", "16:00"]],
-          "tuesday": [["10:00", "16:00"]],
-          "wednesday": [["10:00", "16:00"]],
-          "thursday": [["10:00", "16:00"]],
-          "friday": [["10:00", "16:00"]]
+          "monday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "friday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ]
         }
       },
       "new account opening": {
         "slot_minutes": 15,
         "description": "opening a savings or current account",
         "weekly": {
-          "monday": [["10:00", "16:00"]],
-          "tuesday": [["10:00", "16:00"]],
-          "wednesday": [["10:00", "16:00"]],
-          "thursday": [["10:00", "16:00"]],
-          "friday": [["10:00", "16:00"]]
+          "monday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "tuesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "wednesday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "thursday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ],
+          "friday": [
+            [
+              "10:00",
+              "16:00"
+            ]
+          ]
         }
       }
     }
@@ -130,9 +260,9 @@
   "fraud_support": "Our fraud desk is open twenty four hours a day, every day of the year, and they can block a card or freeze an account straight away.",
   "escalation_contact": "our customer care team",
   "contact_email": "care@hollowfieldbank.example",
-  "greeting_inbound": "Thanks for calling Hollowfield Bank. This is Maya. How can I help you today?",
-  "greeting_outbound": "Hi, this is Maya calling from Hollowfield Bank. Is now an okay time?",
-  "greeting_reminder": "Hi, this is Maya from Hollowfield Bank, just calling about your upcoming appointment.",
-  "silence_check": "Sorry, are you still there?",
-  "silence_goodbye": "I can't hear you, so I'll let you go. Call us back any time."
+  "greeting_inbound": "Hollowfield Bank se Maya bol rahi hoon. Boliye, main aapki kya help kar sakti hoon?",
+  "greeting_outbound": "Namaste, main Maya bol rahi hoon Hollowfield Bank se. Abhi baat kar sakte hain?",
+  "greeting_reminder": "Namaste, Hollowfield Bank se Maya bol rahi hoon, aapke appointment ke baare mein.",
+  "silence_check": "Hello, aap line par hain?",
+  "silence_goodbye": "Awaaz nahi aa rahi, to main call rakh deti hoon. Jab chahein wapas call kar lijiye."
 }

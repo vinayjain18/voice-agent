@@ -94,3 +94,64 @@ def test_spoken_languages_track_the_profile(monkeypatch):
     assert "Hindi" not in Settings.load().language.spoken_languages
     monkeypatch.setenv("LANGUAGE_PROFILE", "hinglish")
     assert "Hindi" in Settings.load().language.spoken_languages
+
+
+# --- how the Hinglish half actually speaks ------------------------------------
+
+def _hinglish(monkeypatch):
+    _clean(monkeypatch)
+    monkeypatch.setenv("LANGUAGE_PROFILE", "hinglish")
+    return Settings.load().language
+
+
+def test_hinglish_is_written_in_roman_script(monkeypatch):
+    """Devanagari came back as formal, bookish Hindi on a real call.
+
+    Roman Hinglish is what people actually speak on the phone, and it keeps the
+    written turn and the spoken turn the same thing.
+    """
+    language = _hinglish(monkeypatch)
+    guidance = language.speaking_guidance
+
+    assert "Roman" in guidance
+    assert "Devanagari" in guidance
+    for example in language.worked_example.splitlines():
+        assert not any("ऀ" <= ch <= "ॿ" for ch in example), example
+
+
+def test_hinglish_speaks_as_a_woman(monkeypatch):
+    """The agent is a woman and must not use masculine verb forms."""
+    language = _hinglish(monkeypatch)
+    guidance = language.speaking_guidance
+
+    for feminine in ("rahi hoon", "sakti hoon", "gayi"):
+        assert feminine in guidance, feminine
+    for masculine in ("raha hoon", "sakta hoon"):
+        assert f"never '{masculine}'" in guidance.lower(), masculine
+
+
+def test_hinglish_examples_use_feminine_forms_only(monkeypatch):
+    """An example that breaks the rule beats the rule (constraint 21)."""
+    spoken = [
+        line for line in _hinglish(monkeypatch).worked_example.splitlines()
+        if line.startswith("You:")
+    ]
+    assert spoken, "the Hinglish example teaches nothing without agent lines"
+    for line in spoken:
+        lowered = line.lower()
+        for masculine in ("raha hoon", "sakta hoon", "karunga", "bataunga"):
+            assert masculine not in lowered, line
+
+
+def test_hinglish_keeps_banking_words_in_english(monkeypatch):
+    """Nobody asks for their "khaata vivaran". Translating jargon sounds wrong."""
+    guidance = _hinglish(monkeypatch).speaking_guidance
+    assert "KYC" in guidance
+    assert "shuddh" in guidance.lower() or "formal Hindi" in guidance
+
+
+def test_hinglish_example_is_a_bank_call(monkeypatch):
+    """The example used to be about building a website for a restaurant."""
+    example = _hinglish(monkeypatch).worked_example.lower()
+    assert "kyc" in example
+    assert "website" not in example

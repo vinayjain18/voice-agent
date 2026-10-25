@@ -72,8 +72,12 @@ def test_greeting_is_fixed_text_from_the_profile():
     profile = load_profile()
     assert opening_line(profile) == profile["greeting_inbound"]
     assert opening_line(profile, outbound=True) == profile["greeting_outbound"]
-    # Answering a call, not placing one.
-    assert "calling" in opening_line(profile).lower()
+    # Answering a call and placing one are different openings, in whichever
+    # language the profile is written in.
+    assert opening_line(profile) != opening_line(profile, outbound=True)
+    assert opening_line(profile, outbound=True).endswith("?"), (
+        "an outbound opening asks whether now is a good time"
+    )
     assert profile["agent_name"] in opening_line(profile)
     assert profile["business_name"] in opening_line(profile)
 
