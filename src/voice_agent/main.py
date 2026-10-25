@@ -36,6 +36,8 @@ from voice_agent.observability.interruption import watch_interruption_fallback
 from voice_agent.observability.summary import infer_outcome, summarise_call
 from voice_agent.providers import build_vad
 from voice_agent.session import build_session
+from voice_agent.silence import build_silence_watch
+from voice_agent.silence import install as install_silence_watch
 from voice_agent.storage import build_store, save_transcript
 from voice_agent.storage.calls import CallLog, build_record
 from voice_agent.whatsapp.disconnect import (
@@ -156,6 +158,11 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(agent, room=ctx.room)
     await ctx.connect()
 
+    # A caller who stops speaking is asked once, then the line is released
+    # rather than held open until they hang up.
+    silence_watch = build_silence_watch(settings, session, agent.profile)
+    install_silence_watch(silence_watch, session)
+
     async def _on_shutdown() -> None:
         """Log usage, save the transcript, then tear the call down.
 
@@ -164,6 +171,10 @@ async def entrypoint(ctx: JobContext) -> None:
         """
         if prefetch is not None and not prefetch.done():
             prefetch.cancel()
+
+        # A pending "are you still there" timer must not outlive the call.
+        if silence_watch is not None:
+            silence_watch.cancel()
 
         # Deleting the LiveKit room does not end the WhatsApp call: without an
         # explicit disconnect the caller hears silence until LiveKit's 30 second

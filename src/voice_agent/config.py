@@ -305,6 +305,14 @@ class PipelineSettings:
     # auto | vad | adaptive
     interruption_mode: str = "auto"
 
+    # Silence before the agent asks whether the caller is still there. This is
+    # the session's away timer; 0 disables silence handling entirely.
+    silence_prompt_seconds: float = 10.0
+    # How long to wait after that question before hanging up.
+    silence_hangup_seconds: float = 10.0
+    # A cap, because repeating a question into silence is constraint 10.
+    silence_max_prompts: int = 2
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -433,6 +441,9 @@ class Settings:
             pipeline=PipelineSettings(
                 turn_detection=_env("TURN_DETECTION", "auto").lower(),
                 interruption_mode=_env("INTERRUPTION_MODE", "auto").lower(),
+                silence_prompt_seconds=float(_env("SILENCE_PROMPT_SECONDS", "10")),
+                silence_hangup_seconds=float(_env("SILENCE_HANGUP_SECONDS", "10")),
+                silence_max_prompts=int(_env("SILENCE_MAX_PROMPTS", "2")),
             ),
             whatsapp=WhatsAppSettings(
                 phone_number_id=_env("WHATSAPP_PHONE_NUMBER_ID"),

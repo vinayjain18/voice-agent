@@ -482,5 +482,7 @@
   "contact_email": "frontdesk@hollowmed.example",
   "greeting_inbound": "Thank you for calling Hollow Medical Center. This is Emma. How can I help you today?",
   "greeting_outbound": "Hi, this is Emma calling from Hollow Medical Center. Is now an okay time?",
-  "greeting_reminder": "Hi, this is Emma from Hollow Medical Center, just calling about your upcoming appointment. Is now an okay time?"
+  "greeting_reminder": "Hi, this is Emma from Hollow Medical Center, just calling about your upcoming appointment. Is now an okay time?",
+  "silence_check": "Sorry, are you still there?",
+  "silence_goodbye": "I can't hear you, so I'll let you go. Call us back any time."
 }

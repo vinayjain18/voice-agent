@@ -75,7 +75,7 @@ environment variable. Every provider is swappable the same way.
 - **Costs are itemised** per call: tokens, characters, audio seconds, and a total.
 - **Everything the agent says is data**, not code. Facts live in JSON, behaviour
   lives in a Markdown prompt.
-- **462 tests**, none of which touch the network.
+- **474 tests**, none of which touch the network.
 
 ---
 
@@ -411,6 +411,9 @@ their defaults; the ones you are most likely to change are below.
 | `TURN_DETECTION` | `auto` | `stt`, `vad`, `livekit` or `auto`. |
 | `INTERRUPTION_MODE` | `auto` | `vad` or `adaptive`. |
 | `STT_EAGER_EOT_THRESHOLD` | `0.4` | Early end-of-turn. The main latency lever. |
+| `SILENCE_PROMPT_SECONDS` | `10` | Silence before "are you still there?". `0` disables. |
+| `SILENCE_HANGUP_SECONDS` | `10` | Further silence after that before hanging up. |
+| `SILENCE_MAX_PROMPTS` | `2` | How many times one call may ask. |
 | `LIVEKIT_MODE` | `cloud` | `cloud` or `local`. |
 | `DATA_DIR` | `./data` | Where leads and transcripts are written. |
 | `LOG_TRANSCRIPT` | `true` | Log the conversation as it happens. |
@@ -626,6 +629,11 @@ is a reliable way to stop a tool being called too early.
   them, and gives **no** medical advice of any kind.
 - **Hangs up** only after asking whether there is anything else *and* hearing the
   answer. If the caller is mid-sentence, it stays on the line.
+- **Notices a caller who has gone quiet.** After ten seconds of silence it asks
+  whether they are still there, and after ten more with no reply it says
+  goodbye and ends the call rather than holding an empty line open. Both
+  timings are environment variables (`SILENCE_PROMPT_SECONDS`,
+  `SILENCE_HANGUP_SECONDS`), and `SILENCE_PROMPT_SECONDS=0` turns it off.
 
 Everything above is prompt and configuration. None of it requires code changes.
 
@@ -936,6 +944,7 @@ voice-agent/
 │   ├── config.py                Typed settings from the environment
 │   ├── session.py               Pipeline assembly and turn-taking
 │   ├── text_filters.py          Cleans LLM output before it is spoken
+│   ├── silence.py               Asks a quiet caller once, then ends the call
 │   ├── pricing.py               Provider list prices, with sources
 │   ├── agents/
 │   │   └── receptionist.py      The agent, its tools, and its guards
@@ -975,7 +984,7 @@ voice-agent/
 │   ├── make_call.py             Place an outbound call
 │   ├── dial_whatsapp_test.py    Place one outbound WhatsApp or reminder call
 │   └── sync_webhook_bundle.py   Refresh the Vercel copy
-├── tests/                       462 tests, no network calls
+├── tests/                       474 tests, no network calls
 └── .env.example                 Every setting, documented
 ```
 
@@ -992,7 +1001,7 @@ touching `storage/` or `reminders/`. A test enforces each of the three.
 
 ```bash
 uv sync                  # install
-uv run pytest            # 462 tests, about ten seconds, no network calls
+uv run pytest            # 474 tests, about ten seconds, no network calls
 uv run ruff check .      # lint
 ```
 

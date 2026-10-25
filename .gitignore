@@ -8,8 +8,11 @@ __pycache__/
 data/
 livekit/*.local.json
 
-# Google service account keys. These are private keys to the appointment sheet,
-# and the README tells you to download one into this directory.
+# Google service account keys.
 service-account*.json
 *service-account.json
 gcp-*.json
+
+# SSH private keys.
+*.pem
+*.key
