@@ -1,488 +1,138 @@
 {
-  "_comment": "DEMO CONTENT for a portfolio project. Hollow Medical Center is FICTIONAL, invented for this demo. It is not a real hospital and must not be presented as one. Replace every line before this is used with real patients.",
-  "_schedule_note": "`schedule` is the single source of truth for the slot grid and for the spoken hours. A department with no `weekly` block is open around the clock; every department here keeps outpatient office hours instead. The emergency room is not a bookable department.",
-  "_timezone_note": "schedule.timezone is the hospital's own timezone, used for rendering. Appointments are stored in UTC, and callers can give times in any timezone they like.",
-  "business_name": "Hollow Medical Center",
-  "agent_name": "Emma",
-  "industry": "multispecialty medical center",
-  "location": "Columbus, Ohio",
-  "address": "4400 Ridgeway Boulevard, Columbus, Ohio 43215",
-  "_hours_note": "Outpatient clinic hours, not the emergency room. The ER runs around the clock and is not bookable: see `emergency_room`. Sourced hours: dentistry 7:00-17:30 plus Saturdays (ADA), eye care 8:30-17:00 (ophthalmology), dermatology 8:00-17:00, orthopedics 8:00-16:30, pediatrics 7:00-18:00. The rest follow the common US outpatient pattern of early morning to late afternoon, Monday to Friday. Every department is 30 minute slots.",
+  "_comment": "DEMO CONTENT for a portfolio project. Hollowfield Bank is FICTIONAL, invented for this demo. It is not a real bank, it holds no money, and nothing here is a real product, rate or policy. Do not present it as one.",
+  "_schedule_note": "`schedule` is the single source of truth for the slot grid and for the spoken hours. A queue with no `weekly` block is open around the clock, which no counter actually is, so every queue here has real hours.",
+  "_timezone_note": "schedule.timezone is the bank's own timezone, used for rendering. Appointments are stored in UTC and spoken in India time, always named.",
+  "business_name": "Hollowfield Bank",
+  "agent_name": "Maya",
+  "industry": "retail bank",
+  "location": "Bandra Kurla Complex, Mumbai",
+  "address": "Hollowfield House, G Block, Bandra Kurla Complex, Mumbai 400051",
+  "_hours_note": "Branch counters follow usual Indian bank hours, ten to four on weekdays. Saturdays are deliberately left out: the second and fourth Saturday of the month are bank holidays and the slot grid cannot express that, so offering a Saturday risks promising a counter that is shut. Video KYC runs longer because it needs no branch.",
   "schedule": {
-    "timezone": "America/New_York",
-    "timezone_label": "Ohio time",
-    "booking_horizon_days": 60,
+    "timezone": "Asia/Kolkata",
+    "timezone_label": "India time",
+    "booking_horizon_days": 30,
     "departments": {
-      "family medicine": {
-        "slot_minutes": 30,
-        "description": "checkups, colds and flu, everyday illness, ongoing conditions",
+      "video kyc": {
+        "slot_minutes": 15,
+        "description": "updating your KYC over a video call with an officer, from wherever you are",
         "weekly": {
-          "monday": [
-            [
-              "07:00",
-              "19:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "07:00",
-              "19:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "07:00",
-              "19:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "07:00",
-              "19:00"
-            ]
-          ],
-          "friday": [
-            [
-              "07:00",
-              "19:00"
-            ]
-          ],
-          "saturday": [
-            [
-              "08:00",
-              "13:00"
-            ]
-          ],
-          "sunday": []
+          "monday": [["09:00", "18:00"]],
+          "tuesday": [["09:00", "18:00"]],
+          "wednesday": [["09:00", "18:00"]],
+          "thursday": [["09:00", "18:00"]],
+          "friday": [["09:00", "18:00"]],
+          "saturday": [["09:00", "14:00"]]
         }
       },
-      "dentistry": {
-        "slot_minutes": 30,
-        "description": "cleanings, fillings, toothache, crowns",
+      "branch kyc": {
+        "slot_minutes": 15,
+        "description": "updating your KYC in person at the branch, with your original documents",
         "weekly": {
-          "monday": [
-            [
-              "07:00",
-              "17:30"
-            ]
-          ],
-          "tuesday": [
-            [
-              "07:00",
-              "17:30"
-            ]
-          ],
-          "wednesday": [
-            [
-              "07:00",
-              "17:30"
-            ]
-          ],
-          "thursday": [
-            [
-              "07:00",
-              "17:30"
-            ]
-          ],
-          "friday": [
-            [
-              "07:00",
-              "17:30"
-            ]
-          ],
-          "saturday": [
-            [
-              "08:00",
-              "13:00"
-            ]
-          ],
-          "sunday": []
+          "monday": [["10:00", "16:00"]],
+          "tuesday": [["10:00", "16:00"]],
+          "wednesday": [["10:00", "16:00"]],
+          "thursday": [["10:00", "16:00"]],
+          "friday": [["10:00", "16:00"]]
         }
       },
-      "eye care": {
-        "slot_minutes": 30,
-        "description": "eye exams, vision tests, glasses and contact lens prescriptions",
+      "account reactivation": {
+        "slot_minutes": 15,
+        "description": "bringing a dormant or inoperative account back into use",
         "weekly": {
-          "monday": [
-            [
-              "08:30",
-              "17:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "08:30",
-              "17:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "08:30",
-              "17:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "08:30",
-              "17:00"
-            ]
-          ],
-          "friday": [
-            [
-              "08:30",
-              "17:00"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
+          "monday": [["10:00", "16:00"]],
+          "tuesday": [["10:00", "16:00"]],
+          "wednesday": [["10:00", "16:00"]],
+          "thursday": [["10:00", "16:00"]],
+          "friday": [["10:00", "16:00"]]
         }
       },
-      "pediatrics": {
-        "slot_minutes": 30,
-        "description": "children from birth to eighteen",
+      "unclaimed deposit claim": {
+        "slot_minutes": 15,
+        "description": "claiming a deposit left untouched for years, including a claim as a nominee or legal heir",
         "weekly": {
-          "monday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "friday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "saturday": [
-            [
-              "08:00",
-              "12:00"
-            ]
-          ],
-          "sunday": []
+          "monday": [["10:00", "16:00"]],
+          "tuesday": [["10:00", "16:00"]],
+          "wednesday": [["10:00", "16:00"]],
+          "thursday": [["10:00", "16:00"]],
+          "friday": [["10:00", "16:00"]]
         }
       },
-      "orthopedics": {
-        "slot_minutes": 30,
-        "description": "bones, joints, sports injuries, back and knee pain",
+      "new account opening": {
+        "slot_minutes": 15,
+        "description": "opening a savings or current account",
         "weekly": {
-          "monday": [
-            [
-              "08:00",
-              "16:30"
-            ]
-          ],
-          "tuesday": [
-            [
-              "08:00",
-              "16:30"
-            ]
-          ],
-          "wednesday": [
-            [
-              "08:00",
-              "16:30"
-            ]
-          ],
-          "thursday": [
-            [
-              "08:00",
-              "16:30"
-            ]
-          ],
-          "friday": [
-            [
-              "08:00",
-              "16:30"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
-        }
-      },
-      "dermatology": {
-        "slot_minutes": 30,
-        "description": "skin, hair and nails, rashes, moles",
-        "weekly": {
-          "monday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "friday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
-        }
-      },
-      "cardiology": {
-        "slot_minutes": 30,
-        "description": "heart checks, blood pressure, palpitations",
-        "weekly": {
-          "monday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "friday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
-        }
-      },
-      "obstetrics and gynecology": {
-        "slot_minutes": 30,
-        "description": "women's health, pregnancy care, annual exams",
-        "weekly": {
-          "monday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "friday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
-        }
-      },
-      "ear nose and throat": {
-        "slot_minutes": 30,
-        "description": "hearing, sinuses, sore throats, tonsils",
-        "weekly": {
-          "monday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "friday": [
-            [
-              "08:00",
-              "17:00"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
-        }
-      },
-      "physical therapy": {
-        "slot_minutes": 30,
-        "description": "rehab after injury or surgery, mobility work",
-        "weekly": {
-          "monday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "tuesday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "wednesday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "thursday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "friday": [
-            [
-              "07:00",
-              "18:00"
-            ]
-          ],
-          "saturday": [],
-          "sunday": []
+          "monday": [["10:00", "16:00"]],
+          "tuesday": [["10:00", "16:00"]],
+          "wednesday": [["10:00", "16:00"]],
+          "thursday": [["10:00", "16:00"]],
+          "friday": [["10:00", "16:00"]]
         }
       }
     }
   },
-  "_department_aliases": "Spoken names callers actually use, mapped to the department key above.",
+  "_department_aliases": "Spoken names callers actually use, mapped to the queue key above. Matching is on word boundaries, so a short alias that hides inside another word is a routing bug.",
   "department_aliases": {
-    "dentist": "dentistry",
-    "dental": "dentistry",
-    "teeth": "dentistry",
-    "tooth": "dentistry",
-    "eye doctor": "eye care",
-    "optometrist": "eye care",
-    "ophthalmologist": "eye care",
-    "vision": "eye care",
-    "eyes": "eye care",
-    "family doctor": "family medicine",
-    "primary care": "family medicine",
-    "general practitioner": "family medicine",
-    "gp": "family medicine",
-    "physical": "family medicine",
-    "checkup": "family medicine",
-    "kids": "pediatrics",
-    "children": "pediatrics",
-    "child": "pediatrics",
-    "baby": "pediatrics",
-    "pediatrician": "pediatrics",
-    "bones": "orthopedics",
-    "knee": "orthopedics",
-    "back": "orthopedics",
-    "shoulder": "orthopedics",
-    "sports injury": "orthopedics",
-    "skin": "dermatology",
-    "rash": "dermatology",
-    "acne": "dermatology",
-    "mole": "dermatology",
-    "heart": "cardiology",
-    "blood pressure": "cardiology",
-    "cardiologist": "cardiology",
-    "obgyn": "obstetrics and gynecology",
-    "ob gyn": "obstetrics and gynecology",
-    "gynecologist": "obstetrics and gynecology",
-    "pregnancy": "obstetrics and gynecology",
-    "prenatal": "obstetrics and gynecology",
-    "ent": "ear nose and throat",
-    "hearing": "ear nose and throat",
-    "sinus": "ear nose and throat",
-    "throat": "ear nose and throat",
-    "pt": "physical therapy",
-    "rehab": "physical therapy",
-    "therapy": "physical therapy"
+    "video": "video kyc",
+    "vkyc": "video kyc",
+    "video call": "video kyc",
+    "video verification": "video kyc",
+    "online kyc": "video kyc",
+    "kyc from home": "video kyc",
+    "from home": "video kyc",
+    "branch": "branch kyc",
+    "in person": "branch kyc",
+    "in branch": "branch kyc",
+    "at the branch": "branch kyc",
+    "counter": "branch kyc",
+    "kyc update": "branch kyc",
+    "re kyc": "branch kyc",
+    "rekyc": "branch kyc",
+    "periodic kyc": "branch kyc",
+    "dormant": "account reactivation",
+    "dormant account": "account reactivation",
+    "inoperative": "account reactivation",
+    "inactive": "account reactivation",
+    "inactive account": "account reactivation",
+    "reactivate": "account reactivation",
+    "reactivation": "account reactivation",
+    "activate my account": "account reactivation",
+    "unclaimed": "unclaimed deposit claim",
+    "unclaimed deposit": "unclaimed deposit claim",
+    "old account": "unclaimed deposit claim",
+    "forgotten account": "unclaimed deposit claim",
+    "nominee claim": "unclaimed deposit claim",
+    "legal heir": "unclaimed deposit claim",
+    "new account": "new account opening",
+    "open an account": "new account opening",
+    "account opening": "new account opening",
+    "savings account": "new account opening",
+    "current account": "new account opening"
   },
   "services": [
-    "Family medicine for checkups, colds and flu, and ongoing conditions",
-    "Dentistry, eye care, dermatology and ear nose and throat",
-    "Pediatrics for children from birth to eighteen",
-    "Orthopedics, cardiology, women's health and physical therapy",
-    "Lab work, X-rays and imaging on site",
-    "A round the clock emergency room for anything urgent"
+    "updating your KYC, either over video or at the branch",
+    "bringing a dormant or inoperative account back into use",
+    "claiming an unclaimed deposit, as the holder, a nominee or a legal heir",
+    "opening a savings or current account",
+    "booking time with an officer at the Bandra Kurla Complex branch"
   ],
-  "consultation_fee": "A standard office visit is one hundred and eighty dollars without insurance, and a specialist visit is two hundred and fifty. With insurance you'd usually just owe your copay.",
-  "payment_methods": "We take all major cards, cash, HSA and FSA cards, and we can set up a payment plan if you need one.",
-  "insurance": "We're in network with most major plans. If you give the front desk your member ID when you arrive they'll verify your benefits before you're seen.",
-  "_insurance_note": "accepted_plans is the ONLY list the agent may confirm from. Anything not on it gets 'I'd have to check' plus a handover, never a yes. Replace this list with the client's real contracted payers before go-live.",
-  "accepted_plans": "Aetna, Anthem Blue Cross Blue Shield, Cigna, UnitedHealthcare, Humana, Medical Mutual of Ohio, Medicare and Ohio Medicaid",
-  "insurance_unknown_plan": "We work with a lot of plans but I wouldn't want to promise yours without checking. Patient services can confirm it in a minute, or bring your card and the desk will verify before you're seen.",
-  "visit_advice": "Please bring a photo ID, your insurance card, a list of anything you're currently taking, and any records from another provider.",
-  "arrival_advice": "Come about fifteen minutes early if it's your first visit, so registration doesn't eat into your appointment.",
-  "walk_in_policy": "We do take walk-ins, though you may wait a while. An appointment is much quicker.",
-  "reports_policy": "Lab results usually post to your patient portal within two business days, and your provider will reach out if anything needs discussing.",
-  "cancellation_policy": "Just let us know at least twenty four hours ahead if you can't make it, so we can offer the slot to someone else.",
-  "emergency_number": "911",
-  "emergency_room": "Our emergency room is open twenty four hours a day, seven days a week, and you don't need an appointment for it.",
-  "escalation_contact": "our patient services team",
-  "contact_email": "frontdesk@hollowmed.example",
-  "greeting_inbound": "Thank you for calling Hollow Medical Center. This is Emma. How can I help you today?",
-  "greeting_outbound": "Hi, this is Emma calling from Hollow Medical Center. Is now an okay time?",
-  "greeting_reminder": "Hi, this is Emma from Hollow Medical Center, just calling about your upcoming appointment. Is now an okay time?",
+  "charges": "There's no charge for updating your KYC or for reactivating an account. If any charge ever applies to something else you ask about, the officer will tell you before anything is done.",
+  "documents": "For a KYC update you'll need one photo ID and one proof of your current address. If your address has changed since you opened the account, bring the new proof rather than the old one.",
+  "_documents_note": "accepted_documents is the ONLY list the agent may confirm from. Anything not on it gets document_unknown. Confirming a document that is then refused at the counter wastes a real trip.",
+  "accepted_documents": "Aadhaar, PAN card, passport, voter ID, driving licence, and for address a recent electricity, gas or water bill, a bank statement, a rent agreement or a property tax receipt",
+  "document_unknown": "I wouldn't want to promise that one without checking, because the officer makes that call on the day. Bring it along with an Aadhaar or passport as well, and you're covered either way.",
+  "visit_advice": "Bring your original photo ID and your address proof, not photocopies. If you're doing it over video, keep the originals in your hand and sit somewhere with decent light and a steady signal.",
+  "arrival_advice": "Come about ten minutes early for a branch appointment, so the paperwork doesn't eat into your slot. For a video call, just be ready a couple of minutes before.",
+  "walk_in_policy": "You're welcome to walk into the branch during counter hours, though you may wait a while at a busy time. An appointment is much quicker.",
+  "turnaround_policy": "Once your documents are verified, the update usually reflects on the account within two working days, and you'll get a message when it's done.",
+  "cancellation_policy": "Just let us know at least a couple of hours ahead if you can't make it, so we can give the slot to someone else. There's no charge for changing or cancelling.",
+  "fraud_hotline": "1800 266 0001",
+  "fraud_support": "Our fraud desk is open twenty four hours a day, every day of the year, and they can block a card or freeze an account straight away.",
+  "escalation_contact": "our customer care team",
+  "contact_email": "care@hollowfieldbank.example",
+  "greeting_inbound": "Thanks for calling Hollowfield Bank. This is Maya. How can I help you today?",
+  "greeting_outbound": "Hi, this is Maya calling from Hollowfield Bank. Is now an okay time?",
+  "greeting_reminder": "Hi, this is Maya from Hollowfield Bank, just calling about your upcoming appointment.",
   "silence_check": "Sorry, are you still there?",
   "silence_goodbye": "I can't hear you, so I'll let you go. Call us back any time."
 }

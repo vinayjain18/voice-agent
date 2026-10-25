@@ -29,7 +29,7 @@ def test_faqs_load():
 
 def test_prompt_includes_the_faqs_and_leaves_no_placeholders(rendered):
     assert "{" not in rendered
-    assert "What does a visit cost?" in rendered
+    assert "Is there any charge for this?" in rendered
     assert "Can I cancel or change my appointment?" in rendered
     # Facts come from the profile, not from prose in the prompt.
     assert load_profile()["business_name"] in rendered
@@ -42,29 +42,33 @@ def test_every_department_reaches_the_prompt(rendered):
         assert name in rendered, name
 
 
-def test_every_department_keeps_real_office_hours(rendered):
-    """Round-the-clock outpatient clinics are not a thing in US healthcare.
-
-    Only the emergency room never closes, and it is not a bookable department.
-    """
+def test_every_queue_keeps_real_counter_hours(rendered):
+    """A bank counter that never closes would be offered at three in the morning."""
     for name, department in load_profile().schedule.departments.items():
         assert not department.is_always_open, f"{name} is still open 24/7"
-        assert department.slot_minutes == 30, name
+        assert department.slot_minutes == 15, name
         assert not department.weekly.get("sunday"), f"{name} opens on a Sunday"
         for windows in department.weekly.values():
             for opens, closes in windows:
-                assert opens.hour >= 7, (name, opens)
-                assert closes.hour <= 19, (name, closes)
+                assert opens.hour >= 9, (name, opens)
+                assert closes.hour <= 18, (name, closes)
 
 
-def test_the_hospital_runs_on_ohio_time():
-    """Columbus is Eastern. There is no Ohio-specific IANA zone."""
-    assert load_profile().schedule.timezone == "America/New_York"
+def test_branch_queues_do_not_offer_a_saturday():
+    """The second and fourth Saturday are bank holidays, which the grid cannot
+    express, so a branch slot must never be offered on one."""
+    departments = load_profile().schedule.departments
+    for name in ("branch kyc", "account reactivation", "unclaimed deposit claim"):
+        assert not departments[name].weekly.get("saturday"), name
 
 
-def test_the_emergency_room_is_still_always_open(rendered):
+def test_the_bank_runs_on_india_time():
+    assert load_profile().schedule.timezone == "Asia/Kolkata"
+
+
+def test_the_fraud_desk_is_always_open(rendered):
     """The one thing that genuinely is 24/7, and the agent must not lose it."""
-    assert "twenty four hours a day" in load_profile()["emergency_room"]
+    assert "twenty four hours a day" in load_profile()["fraud_support"]
     assert "twenty four hours" in rendered
 
 
@@ -86,8 +90,9 @@ def test_editorial_comment_keys_are_not_sent_to_the_model():
     assert "_comment" not in profile.as_prompt_vars()
 
 
-def test_agent_is_told_never_to_give_medical_advice(rendered):
-    """A clinic may quote a consultation fee. It may never advise on treatment."""
+def test_agent_is_told_never_to_handle_money_or_credentials(rendered):
+    """A service desk may book an appointment. It may never touch an account."""
     flat = " ".join(rendered.split())
-    assert "You are reception, not a clinician" in flat
-    assert "Never diagnose" in flat
+    assert "You are the service desk, not a banker" in flat
+    assert "Never read out a balance" in flat
+    assert "Never take an account number, a card number, an Aadhaar number, a PIN or an OTP" in flat

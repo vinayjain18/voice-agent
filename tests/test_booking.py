@@ -27,9 +27,9 @@ UTC = ZoneInfo("UTC")
 HOSPITAL_TZ = load_profile().schedule.tz
 IDENTITY = "voice_agent.agents.receptionist._call_identity"
 
-# Dentistry keeps real office hours and runs on Saturdays, so it exercises both
-# the grid and the timezone conversion.
-DEPARTMENT = "dentistry"
+# Video KYC keeps real hours and runs on Saturdays, so it exercises both the
+# grid and the timezone conversion.
+DEPARTMENT = "video kyc"
 
 
 @pytest.fixture(autouse=True)
@@ -263,14 +263,14 @@ async def test_availability_only_offers_real_slots(agent, sheet):
 async def test_availability_says_so_when_a_department_is_closed(agent):
     """Dentistry does not open on Sundays, and the agent must not pretend it does."""
     schedule = load_profile().schedule
-    dentistry = schedule.department(DEPARTMENT)
+    queue = schedule.department(DEPARTMENT)
     day = datetime.now(HOSPITAL_TZ).date()
     for _ in range(8):
         day += timedelta(days=1)
-        if not dentistry.slots_on(day, hospital_tz=schedule.tz):
+        if not queue.slots_on(day, hospital_tz=schedule.tz):
             break
     else:
-        raise AssertionError("dentistry never closes, so this test proves nothing")
+        raise AssertionError(f"{DEPARTMENT} never closes, so this test proves nothing")
 
     result = await agent.check_availability(None, DEPARTMENT, day=day.strftime("%Y-%m-%d"))
 
@@ -568,53 +568,54 @@ def test_prompt_forbids_ending_in_the_same_turn(rendered):
     assert "silence is not an answer" in rendered
 
 
-def test_prompt_refuses_to_give_medical_advice(rendered):
-    """The refusal that could actually hurt someone if it slipped."""
-    assert "You are reception, not a clinician" in rendered
-    assert "Never diagnose or interpret" in rendered
-    assert "Never read or interpret a test result" in rendered
+def test_prompt_refuses_to_act_as_a_banker(rendered):
+    """Reading an account out to whoever is holding the phone is the worst
+    failure available to a bank service desk."""
+    assert "You are the service desk, not a banker" in rendered
+    assert "Never read out a balance" in rendered
+    assert "Never read out a transaction" in rendered
+    assert "licensed banker" in rendered
 
 
-def test_prompt_refuses_prescriptions_absolutely(rendered):
-    """Prescribing over the phone is the clearest line this agent must not cross."""
-    assert "Never anything to do with medication" in rendered
-    assert "You do not prescribe" in rendered
-    assert "You do not refill" in rendered
-    assert "You do not renew" in rendered
-    assert "start, stop, skip, split or change the dose" in rendered
-    assert "licensed provider" in rendered
+def test_prompt_never_collects_credentials(rendered):
+    """The agent must not become the voice on the phone asking for an OTP."""
+    assert (
+        "Never take an account number, a card number, an Aadhaar number, a PIN or an OTP"
+        in rendered
+    )
+    assert "no one from this bank will ever ask for an OTP" in rendered
+
+
+def test_prompt_refuses_to_touch_money(rendered):
+    """Moving or refunding money is a decision only the bank can make."""
+    assert "Never anything to do with their money" in rendered
+    assert "You do not move money" in rendered
+    assert "You do not reverse a transaction" in rendered
+    assert "You do not waive a charge" in rendered
     # Demonstrated as well as stated: examples beat rules.
-    assert "Refills have to come from your provider" in rendered
+    assert "That has to come from your branch officer rather than the service desk" in rendered
 
 
-def test_prompt_refuses_over_the_counter_advice_too(rendered):
-    """"Just take an antihistamine" is still medication advice."""
-    assert "that is medication advice" in rendered
-    assert "even for something sold over the counter" in rendered
-
-
-def test_a_plan_is_only_confirmed_if_it_is_on_the_list(rendered):
-    """Confirming a plan we are not in network with costs the patient real money."""
-    assert "These are the only plans you may confirm" in rendered
+def test_a_document_is_only_confirmed_if_it_is_on_the_list(rendered):
+    """Confirming a document that is then refused costs the customer a trip."""
+    assert "These are the only documents you may confirm" in rendered
     assert "do NOT say yes and do NOT say no" in rendered
-    for plan in ("Aetna", "Cigna", "UnitedHealthcare", "Ohio Medicaid"):
-        assert plan in rendered, plan
+    for document in ("Aadhaar", "PAN card", "passport", "driving licence"):
+        assert document in rendered, document
 
 
-def test_coverage_and_copay_are_never_predicted(rendered):
-    assert "Never say what a plan will cover" in rendered
-    assert "what their copay or deductible will be" in rendered
-    assert "you'll just owe your copay" in rendered
+def test_what_the_officer_will_accept_is_never_predicted(rendered):
+    assert "Never say what the officer will accept" in rendered
 
 
-def test_prompt_puts_emergencies_before_everything_else(rendered):
-    """Booking chest pain into a routine slot is the worst failure available."""
-    assert "Emergencies come first" in rendered
-    assert "chest pain" in rendered
+def test_prompt_puts_fraud_before_everything_else(rendered):
+    """A caller whose money is moving must not be offered Tuesday at eleven."""
+    assert "Fraud and lost cards come first" in rendered
+    assert "money is leaving their account" in rendered
     assert "Do not offer an appointment instead" in rendered
-    assert "When in doubt, treat it as an emergency" in rendered
+    assert "When in doubt, treat it as fraud" in rendered
     # The number is interpolated from the profile, not hardcoded in the prompt.
-    assert load_profile()["emergency_number"] in rendered
+    assert load_profile()["fraud_hotline"] in rendered
 
 
 def test_prompt_requires_checking_availability_before_offering_a_time(rendered):
@@ -627,9 +628,9 @@ def test_prompt_requires_confirming_which_appointment_before_cancelling(rendered
     assert "Cancelling the wrong one" in rendered
 
 
-def test_prompt_refuses_everything_outside_the_hospital(rendered):
+def test_prompt_refuses_everything_outside_the_bank(rendered):
     """Coding, cooking and the rest are declined, not attempted."""
-    assert "Anything that is not this hospital, you decline" in rendered
+    assert "Anything that is not this bank, you decline" in rendered
     for topic in (
         "You do not help with programming, code, debugging",
         "You do not help with cooking or recipes",
@@ -643,10 +644,10 @@ def test_prompt_refuses_everything_outside_the_hospital(rendered):
     assert "banana bread" in rendered
 
 
-def test_prompt_still_covers_the_other_calls_a_hospital_gets(rendered):
+def test_prompt_still_covers_the_other_calls_a_bank_gets(rendered):
     for topic in (
-        "Asking for test results over the phone",
-        "Asking about a bill or what insurance covers",
+        "Asking for a balance or a statement over the phone",
+        "Asking why a charge was applied or whether a fee can go",
         "Anyone abusive",
         "A wrong number",
     ):
@@ -858,7 +859,8 @@ async def test_end_call_accepts_an_explicit_hangup(agent):
 
 @pytest.mark.asyncio
 async def test_availability_with_no_day_asks_when_suits_them(agent):
-    """It used to push 7am and 7:30am the moment the caller said "dentist".
+    """The agent must not push the first slots of the day before it knows when
+    the caller can come in.
 
     The caller had not said when they could come in. Ask, then offer.
     """
@@ -887,7 +889,7 @@ async def test_availability_on_a_day_quotes_that_days_hours(agent):
 
     assert hours_on(schedule, dept, saturday, today=today) in result
     # The weekday window must not be in there to be misread.
-    assert "7am to 5:30pm" not in result
+    assert "9am to 6pm" not in result
 
 
 @pytest.mark.asyncio
@@ -909,7 +911,7 @@ async def test_hours_are_quoted_in_clinic_time_and_the_zone_is_named(agent):
 
     assert "your time" not in result
     assert schedule.timezone_label in result
-    assert "8am to 1pm" in result
+    assert "9am to 2pm" in result
 
 
 @pytest.mark.asyncio
@@ -925,7 +927,7 @@ async def test_the_time_they_asked_for_decides_which_slots_are_shown(agent):
     monday = today + timedelta(days=(0 - today.weekday()) % 7 or 7)
 
     result = await agent.check_availability(
-        None, "eye care", day=monday.strftime("%Y-%m-%d"), time="10:00"
+        None, "branch kyc", day=monday.strftime("%Y-%m-%d"), time="10:00"
     )
 
     offered = result.split("Hours:")[0]
@@ -939,33 +941,35 @@ async def test_a_taken_time_offers_its_neighbours_not_the_start_of_the_day(agent
     today = datetime.now(UTC).astimezone(schedule.tz).date()
     monday = today + timedelta(days=(0 - today.weekday()) % 7 or 7)
     await agent.book_appointment(
-        None, name="Someone", department="eye care",
+        None, name="Someone", department="branch kyc",
         date=monday.strftime("%Y-%m-%d"), time="10:00",
     )
 
     result = await agent.check_availability(
-        None, "eye care", day=monday.strftime("%Y-%m-%d"), time="10:00"
+        None, "branch kyc", day=monday.strftime("%Y-%m-%d"), time="10:00"
     )
 
     offered = result.split("Hours:")[0]
     assert "nothing at that exact time" in offered
-    assert "9:30am" in offered and "10:30am" in offered
+    assert "10:15am" in offered and "10:45am" in offered
     assert "8:30am" not in offered
 
 
 @pytest.mark.asyncio
 async def test_a_time_outside_opening_hours_says_the_window_they_can_book(agent):
-    """"Ten AM IST" is half two in the morning here. Say when they can."""
+    """Ten in the morning in New York is the middle of the night here. Say
+    when they can actually book."""
     schedule = agent.schedule
     today = datetime.now(UTC).astimezone(schedule.tz).date()
     monday = today + timedelta(days=(0 - today.weekday()) % 7 or 7)
 
     result = await agent.check_availability(
-        None, "eye care", day=monday.strftime("%Y-%m-%d"), time="10:00", timezone="IST"
+        None, "branch kyc", day=monday.strftime("%Y-%m-%d"), time="10:00",
+        timezone="America/New_York",
     )
 
-    assert "outside eye care hours" in result
-    assert "8:30am to 5pm" in result
+    assert "outside branch kyc hours" in result
+    assert "10am to 4pm" in result
     assert schedule.timezone_label in result
 
 
@@ -982,7 +986,7 @@ def test_the_worked_example_answers_availability_with_the_hours(rendered):
     This example used to answer "when is he available?" with two slot times,
     which is precisely the failure. The model was copying it faithfully.
     """
-    asked = rendered.index("I want to see the dentist. When's he available?")
+    asked = rendered.index("I need to see someone about reactivating my account")
     answer = rendered[asked : asked + 300]
     assert "He's in Monday to Friday" in answer
     assert "Saturday mornings till one" in answer
@@ -1116,9 +1120,9 @@ def test_prompt_says_what_to_do_when_their_time_is_out_of_hours(rendered):
 
 def test_no_worked_example_converts_our_hours(rendered):
     """Constraint 21: an example that breaks the rule beats the rule."""
-    asked = rendered.index("Can I get an eye exam at ten in the morning, India time?")
+    asked = rendered.index("Can I do the video KYC at ten in the morning, Dubai time?")
     block = rendered[asked : asked + 420]
-    assert "Ohio time" in block
+    assert "India time" in block
     assert "your time" not in block.replace("in my time", "")
     assert "rather not get that wrong" in block
 
@@ -1387,25 +1391,24 @@ async def test_re_checking_an_already_offered_slot_does_not_block_the_booking(ag
 
 @pytest.mark.asyncio
 async def test_a_time_with_no_day_asks_for_the_day_rather_than_dropping_it(agent):
-    """"Today at five PM IST" arrived with no date, so nothing checked it.
+    """A time with no day cannot be placed against opening hours.
 
-    The tool returned the hours and nothing else, and the model filled the gap
-    itself: it said five PM IST was after hours because we close at five. Five
-    PM IST is half seven in the morning here.
+    Given one, the tool must ask which day rather than let the model judge the
+    time itself.
     """
     result = await agent.check_availability(
-        None, "eye care", time="17:00", timezone="IST"
+        None, "branch kyc", time="17:00", timezone="America/New_York"
     )
 
     assert "which day" in result.lower()
     assert "Do not tell them whether" in result
-    assert "5pm" not in result.replace("8:30am to 5pm", "")
+    assert "5pm" not in result.replace("10am to 4pm", "")
 
 
 @pytest.mark.asyncio
 async def test_a_day_with_no_time_still_asks_what_time_of_day(agent):
     """The existing no-day behaviour is untouched."""
-    result = await agent.check_availability(None, "eye care")
+    result = await agent.check_availability(None, "branch kyc")
 
     assert "Do not read times out yet" in result
     assert "which day suits them" in result
@@ -1616,13 +1619,14 @@ async def test_an_explicit_timezone_beats_a_slot_we_happened_to_offer(agent, she
 
     with patch(IDENTITY, return_value=("room-1", "+919876543210")):
         await agent.book_appointment(
-            None, department=DEPARTMENT, name="Asha", **local(slot), timezone="IST"
+            None, department=DEPARTMENT, name="Asha", **local(slot),
+            timezone="America/New_York",
         )
 
     saved = rows(sheet)
     if saved:
         assert datetime.fromisoformat(saved[0]["slot_utc"]) != slot, (
-            "an explicit IST time was read as clinic time"
+            "an explicitly named zone was read as our own clock"
         )
 
 

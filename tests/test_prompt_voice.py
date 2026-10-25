@@ -132,31 +132,31 @@ def test_prompt_teaches_leading_the_conversation(rendered):
     assert "Never ask two questions in one breath" in rendered
 
 
-def test_prompt_covers_the_calls_a_hospital_line_gets(flat):
-    """A hospital line gets more than patients booking in."""
+def test_prompt_covers_the_calls_a_bank_line_gets(flat):
+    """A bank line gets more than customers booking in."""
     for topic in (
         "Someone selling to us",
         "Someone asking for a job",
-        "Asking for test results over the phone",
-        "Asking for a specific provider by name",
-        "Asking about a bill or what insurance covers",
+        "Asking for a balance or a statement over the phone",
+        "Asking for a specific officer by name",
+        "Asking why a charge was applied or whether a fee can go",
         "Someone in a hurry",
     ):
         assert topic in flat, topic
 
 
-def test_results_are_never_read_out_at_the_desk(flat):
-    assert "no visibility into results" in flat
-    assert "don't say whether a result is normal" in flat
+def test_the_account_is_never_read_out_at_the_desk(flat):
+    assert "no view of the account" in flat
+    assert "don't say whether something has cleared" in flat
 
 
-def test_a_providers_whereabouts_are_never_disclosed(flat):
-    assert "Don't say whether they're in, busy, or with a patient" in flat
+def test_an_officers_whereabouts_are_never_disclosed(flat):
+    assert "Don't say whether they're in, busy, or with a customer" in flat
 
 
-def test_coverage_is_never_promised(flat):
-    """Telling someone their insurance covers it, and being wrong, costs money."""
-    assert "Don't quote coverage or promise what will be paid" in flat
+def test_a_refund_is_never_promised(flat):
+    """Telling someone a charge will be reversed, and being wrong, costs trust."""
+    assert "don't promise anything will be refunded" in flat
 
 
 def test_prompt_handles_the_awkward_times(rendered):

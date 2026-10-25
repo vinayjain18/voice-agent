@@ -1,5 +1,14 @@
 # Voice Agent
 
+> **Branch `bank-agent`.** This branch runs the same engine as a bank service
+> desk: Hollowfield Bank, a fictional retail bank in Bandra Kurla Complex,
+> Mumbai, speaking Hinglish. It calls customers whose KYC is overdue or whose
+> account has gone dormant, explains what is needed, and books a video KYC or
+> branch slot. The clinic receptionist lives on `main`, and switching back is
+> `git checkout main` plus a rebuild. Only the business content, the prompt and
+> their tests differ; the code is the same. The rest of this README still
+> describes the clinic.
+
 A low-latency voice agent that answers a hospital's phone, holds a real
 conversation with a patient, routes them to the right department, books a real
 appointment slot, and rings them back shortly before it.

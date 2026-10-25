@@ -1,77 +1,77 @@
 {
-  "_comment": "DEMO CONTENT for a fictional hospital. Answers are written to be spoken aloud: short, contracted, no lists, no markup. These are quoted almost verbatim on a call, so they follow the same voice rules as the prompt.",
+  "_comment": "DEMO CONTENT. Fictional bank, fictional policies. Answers are read almost verbatim on a call, so they are written to be spoken: contractions, no markdown, no symbols, numbers in words where a symbol would be read out wrong.",
   "faqs": [
     {
       "q": "What are your hours?",
-      "a": "The emergency room never closes. Our clinics are mostly Monday to Friday, eight to five, though some open earlier and dentistry and family medicine do Saturday mornings. Which department did you need?"
+      "a": "The branch counters are open ten to four, Monday to Friday. Video KYC runs longer, nine to six on weekdays and nine to two on Saturday. Our fraud desk never closes."
     },
     {
-      "q": "What does a visit cost?",
-      "a": "A standard office visit is a hundred and eighty dollars without insurance, and a specialist visit is two fifty. With insurance you'd usually just owe your copay."
+      "q": "What is KYC and why do I have to do it again?",
+      "a": "It's the bank re-checking your ID and address every few years. It's a rule we have to follow, not something you've done wrong. It takes about ten minutes."
     },
     {
-      "q": "Do you take my insurance?",
-      "a": "We're in network with Aetna, Anthem Blue Cross Blue Shield, Cigna, UnitedHealthcare, Humana, Medical Mutual, Medicare and Ohio Medicaid. If yours isn't one of those I'd rather check than guess. Which plan are you on?"
+      "q": "What happens if I don't update my KYC?",
+      "a": "The account can get restricted, which means you'd have trouble using it until the update is done. That's why we'd rather get you booked in now."
     },
     {
-      "q": "What departments do you have?",
-      "a": "Family medicine, dentistry, eye care, pediatrics, orthopedics, dermatology, cardiology, women's health, ear nose and throat, and physical therapy. Which one did you need?"
+      "q": "Can I do my KYC right now on this call?",
+      "a": "Not on this call, I'm afraid. It has to be done with an officer, either over video or at the branch, and I can book you the next slot either way."
     },
     {
-      "q": "Can I see a dentist here?",
-      "a": "Yes, we've got a dental department. Cleanings, fillings, toothache, crowns. Want me to find you a time?"
+      "q": "Do I have to come to the branch?",
+      "a": "Not necessarily. Most people do it over a video call from home, which takes about ten minutes. If you'd rather come in, the branch works too."
     },
     {
-      "q": "Can I get my eyes checked?",
-      "a": "Yes, eye care handles exams, vision tests and prescriptions for glasses or contacts. Shall I book you in?"
+      "q": "What documents should I bring?",
+      "a": "One photo ID and one proof of your current address. An Aadhaar or passport works for the ID, and a recent bill or bank statement works for the address."
     },
     {
-      "q": "Do you see children?",
-      "a": "We do, pediatrics covers birth right through to eighteen. For anything under a year old, do mention it when you book."
+      "q": "Is there any charge for this?",
+      "a": "No, updating your KYC is free, and so is reactivating a dormant account."
     },
     {
-      "q": "Can I just walk in?",
-      "a": "For the emergency room, yes, any time. For a clinic appointment you can walk in during opening hours but you might wait a while. Shall I book you a time?"
+      "q": "My account has been frozen or gone dormant. Can you fix it?",
+      "a": "Yes, that's usually a KYC update plus a quick reactivation at the counter. I can book both into one appointment."
     },
     {
-      "q": "Where are you?",
-      "a": "We're at forty four hundred Ridgeway Boulevard in Columbus. There's parking on site and the main entrance is off Ridgeway."
+      "q": "I think I have money in an old account I forgot about.",
+      "a": "That happens more than you'd think. Bring whatever you still have, an old passbook, a cheque book, anything with the account on it, and an officer will trace it for you."
     },
     {
-      "q": "What should I bring?",
-      "a": "A photo ID, your insurance card, a list of anything you're currently taking, and any records from another provider."
+      "q": "Can I claim money from an account in my late father's name?",
+      "a": "Yes, as a nominee or a legal heir. It needs a separate appointment because the officer has to see the original documents, and I'm very sorry for your loss."
     },
     {
-      "q": "How early should I arrive?",
-      "a": "About fifteen minutes before, if it's your first visit. That way registration doesn't eat into your appointment."
-    },
-    {
-      "q": "Can I get a refill on my prescription?",
-      "a": "Refills have to come from your provider rather than the front desk, I'm afraid. I can get you booked in and they'll take care of it."
-    },
-    {
-      "q": "When will my test results be ready?",
-      "a": "They usually post to your patient portal within two business days, and your provider will reach out if anything needs discussing."
+      "q": "How long does it take to reflect on my account?",
+      "a": "Usually within two working days of the documents being verified, and you'll get a message when it's done."
     },
     {
       "q": "Can I cancel or change my appointment?",
-      "a": "Of course. I can find it from the number you're calling on, or you can give me the four digit booking number."
+      "a": "Of course. Let us know a couple of hours ahead if you can, so someone else can take the slot. There's no charge either way."
     },
     {
-      "q": "Will you remind me?",
-      "a": "Yes, we'll give you a ring about half an hour before, just so it doesn't slip your mind."
+      "q": "Can I just walk in?",
+      "a": "You can, during counter hours. You might wait a while at a busy time, so an appointment is quicker if you can plan it."
     },
     {
-      "q": "Do you do home visits?",
-      "a": "Not at the moment, I'm afraid. Everything's here at the medical center."
+      "q": "Where are you?",
+      "a": "We're at Hollowfield House in G Block, Bandra Kurla Complex, Mumbai. It's a short walk from the main road and there's parking behind the building."
     },
     {
-      "q": "I'm not in the US, can you still book me?",
-      "a": "Absolutely. Just tell me the time that works for you and which timezone you're in, and I'll take care of the rest."
+      "q": "Someone called asking for my OTP. Was that you?",
+      "a": "No, and please don't share it with anyone. Nobody from this bank will ever ask you for an OTP, a PIN or a card number. If you've already shared it, call our fraud desk straight away."
     },
     {
-      "q": "Will my insurance cover this visit?",
-      "a": "That depends on your specific plan and I wouldn't want to guess at it. Patient services can check your benefits properly, and the desk verifies before you're seen either way."
+      "q": "I've lost my card.",
+      "a": "Call our fraud desk right away on one eight hundred, two six six, double zero zero one. They're open all day and night and they'll block it in a minute."
+    },
+    {
+      "q": "Can you tell me my balance?",
+      "a": "Not from here, I'm afraid. Balances only come from net banking, the app, an ATM or an officer who can verify who you are."
+    },
+    {
+      "q": "Can I open a new account?",
+      "a": "Yes, savings or current. It's a branch appointment and takes about twenty minutes. Shall I find you a time?"
     }
   ]
 }
