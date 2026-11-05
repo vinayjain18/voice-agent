@@ -117,11 +117,10 @@ def attach_conversation_logging(
         outputs = list(getattr(event, "function_call_outputs", []) or [])
         for index, call in enumerate(calls):
             output = outputs[index] if index < len(outputs) else None
-            # A None output means the tool raised StopResponse or returned
-            # nothing usable, which is worth seeing rather than hiding.
-            result = (
-                _clip(getattr(output, "output", "")) if output is not None else "(no output)"
-            )
+            # end_call and anything that raises StopResponse return nothing, so
+            # the output is empty. Say so rather than logging a bare arrow: the
+            # hangup is the one call worth seeing in a log.
+            result = _clip(getattr(output, "output", "") or "") or "(no output)"
             logger.info(
                 "-- tool | %s(%s) -> %s",
                 getattr(call, "name", "?"),

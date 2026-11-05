@@ -7,7 +7,7 @@ import logging
 from livekit.agents import tts as tts_base
 
 # Must be module scope - see the note in providers/stt.py.
-from livekit.plugins import cartesia, deepgram, rumik_ai
+from livekit.plugins import cartesia, deepgram, rumik_ai, sarvam
 
 from voice_agent.config import ConfigError, TTSSettings, require_api_key
 
@@ -24,6 +24,20 @@ RUMIK_DEFAULT_SPEAKER = "ira"
 # can warn on a typo instead of silently falling back to a generated voice.
 RUMIK_FEMALE_VOICES = {"emma", "mia", "sophia", "ava", "ira", "siya", "aisha", "zoya"}
 RUMIK_MALE_VOICES = {"lucas", "noah", "theo", "adam"}
+
+# Bulbul v4 Flash voices are named <person>_<language>_<style>. The language is
+# part of the voice: an `_enhi_` persona is trained on sentences that mix Hindi
+# and English, which is what this agent speaks, while an `_en_` persona reads
+# the Hindi words as English. So the default follows the target language rather
+# than being one fixed name.
+#
+# Sarvam publishes no gender label for the v4 personas. These two are chosen by
+# first name and should be confirmed by ear before a demo.
+SARVAM_DEFAULT_SPEAKERS = {
+    "hi-IN": "simran_enhi_customer",
+    "en-IN": "ishita_en_customer",
+}
+SARVAM_FALLBACK_SPEAKER = "simran_enhi_customer"
 
 
 def build_tts(settings: TTSSettings) -> tts_base.TTS:
@@ -56,6 +70,23 @@ def build_tts(settings: TTSSettings) -> tts_base.TTS:
 
         return rumik_ai.TTS(**kwargs)
 
+    if settings.provider == "sarvam":
+        # The plugin reads SARVAM_API_KEY itself; resolving it here turns a
+        # missing key into a startup message rather than a dead first call.
+        require_api_key("sarvam")
+        speaker = (settings.sarvam_speaker or "").strip().lower() or (
+            SARVAM_DEFAULT_SPEAKERS.get(
+                settings.sarvam_language, SARVAM_FALLBACK_SPEAKER
+            )
+        )
+        # The plugin validates the name against the model and raises on a typo,
+        # which is better than silently speaking in the wrong voice.
+        return sarvam.TTS(
+            model=settings.model,
+            speaker=speaker,
+            target_language_code=settings.sarvam_language,
+        )
+
     if settings.provider == "cartesia":
         kwargs = {"model": settings.model, "api_key": require_api_key("cartesia")}
         if settings.cartesia_voice:
@@ -64,5 +95,5 @@ def build_tts(settings: TTSSettings) -> tts_base.TTS:
 
     raise ConfigError(
         f"Unsupported TTS_PROVIDER '{settings.provider}'. "
-        "Supported: deepgram, rumik, cartesia."
+        "Supported: deepgram, rumik, sarvam, cartesia."
     )

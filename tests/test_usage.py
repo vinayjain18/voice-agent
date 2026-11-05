@@ -64,6 +64,22 @@ def test_rumik_is_cheaper_than_deepgram_for_the_same_text():
     assert cost_of("mulberry") < cost_of("aura-2-andromeda-en")
 
 
+def test_sarvam_voices_are_priced():
+    """An unpriced model is silently counted as free in the call summary."""
+    assert pricing.tts_price("bulbul:v4-flash") is not None
+    assert pricing.tts_price("bulbul:v3") is not None
+    # v4 Flash is the cheap tier, which is the reason it is the default.
+    assert (
+        pricing.TTS_PRICES["bulbul:v4-flash"].per_1k_chars_usd
+        < pricing.TTS_PRICES["bulbul:v3"].per_1k_chars_usd
+    )
+    # It still costs more per character than Rumik, so a call gets dearer.
+    assert (
+        pricing.TTS_PRICES["bulbul:v4-flash"].per_1k_chars_usd
+        > pricing.TTS_PRICES["mulberry"].per_1k_chars_usd
+    )
+
+
 def test_aura_voice_names_resolve_to_the_family_price():
     assert pricing.tts_price("aura-2-andromeda-en") is not None
     assert pricing.tts_price("aura-2-thalia-en") is not None

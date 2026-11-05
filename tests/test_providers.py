@@ -43,6 +43,71 @@ def test_rumik_tts_builds_with_mulberry(monkeypatch):
     assert isinstance(tts, rumik_ai.TTS)
 
 
+def test_sarvam_tts_builds_with_bulbul_v4_flash(monkeypatch):
+    monkeypatch.setenv("SARVAM_API_KEY", "test-key")
+    from livekit.plugins import sarvam
+
+    tts = build_tts(
+        TTSSettings(
+            provider="sarvam", model="bulbul:v4-flash", sarvam_language="hi-IN"
+        )
+    )
+    assert isinstance(tts, sarvam.TTS)
+    assert tts._opts.model == "bulbul:v4-flash"
+    assert tts._opts.target_language_code == "hi-IN"
+
+
+def test_sarvam_voice_follows_the_language(monkeypatch):
+    """An _enhi_ persona speaks the mixed sentences this agent produces.
+
+    An _en_ persona reads the Devanagari half as English, so the voice cannot
+    be one fixed name across profiles.
+    """
+    monkeypatch.setenv("SARVAM_API_KEY", "test-key")
+    from voice_agent.providers.tts import SARVAM_DEFAULT_SPEAKERS
+
+    hinglish = build_tts(
+        TTSSettings(
+            provider="sarvam", model="bulbul:v4-flash", sarvam_language="hi-IN"
+        )
+    )
+    english = build_tts(
+        TTSSettings(
+            provider="sarvam", model="bulbul:v4-flash", sarvam_language="en-IN"
+        )
+    )
+    assert hinglish._opts.speaker == SARVAM_DEFAULT_SPEAKERS["hi-IN"]
+    assert english._opts.speaker == SARVAM_DEFAULT_SPEAKERS["en-IN"]
+    assert "_enhi_" in SARVAM_DEFAULT_SPEAKERS["hi-IN"]
+
+
+def test_sarvam_speaker_override_is_normalised(monkeypatch):
+    monkeypatch.setenv("SARVAM_API_KEY", "test-key")
+    tts = build_tts(
+        TTSSettings(
+            provider="sarvam",
+            model="bulbul:v4-flash",
+            sarvam_language="hi-IN",
+            sarvam_speaker="  Ishita_enhi_Customer  ",
+        )
+    )
+    assert tts._opts.speaker == "ishita_enhi_customer"
+
+
+def test_sarvam_rejects_a_voice_the_model_cannot_speak(monkeypatch):
+    """A typo must fail loudly, not fall back to some other voice."""
+    monkeypatch.setenv("SARVAM_API_KEY", "test-key")
+    with pytest.raises(ValueError, match="not compatible"):
+        build_tts(
+            TTSSettings(
+                provider="sarvam",
+                model="bulbul:v4-flash",
+                sarvam_language="hi-IN",
+                sarvam_speaker="simran_enhi_custmer",
+            )
+        )
+
+
 def test_unknown_provider_is_rejected():
     with pytest.raises(ConfigError, match="Unsupported TTS_PROVIDER"):
         build_tts(TTSSettings(provider="nope"))
