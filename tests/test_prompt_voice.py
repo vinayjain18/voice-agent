@@ -132,31 +132,31 @@ def test_prompt_teaches_leading_the_conversation(rendered):
     assert "Never ask two questions in one breath" in rendered
 
 
-def test_prompt_covers_the_calls_a_bank_line_gets(flat):
-    """A bank line gets more than customers booking in."""
+def test_prompt_covers_the_calls_a_hospital_line_gets(flat):
+    """A hospital line gets more than patients booking in."""
     for topic in (
         "Someone selling to us",
         "Someone asking for a job",
-        "Asking for a balance or a statement over the phone",
-        "Asking for a specific officer by name",
-        "Asking why a charge was applied or whether a fee can go",
+        "Asking for test results over the phone",
+        "Asking for a specific provider by name",
+        "Asking about a bill or what insurance covers",
         "Someone in a hurry",
     ):
         assert topic in flat, topic
 
 
-def test_the_account_is_never_read_out_at_the_desk(flat):
-    assert "no view of the account" in flat
-    assert "don't say whether something has cleared" in flat
+def test_results_are_never_read_out_at_the_desk(flat):
+    assert "no visibility into results" in flat
+    assert "don't say whether a result is normal" in flat
 
 
-def test_an_officers_whereabouts_are_never_disclosed(flat):
-    assert "Don't say whether they're in, busy, or with a customer" in flat
+def test_a_providers_whereabouts_are_never_disclosed(flat):
+    assert "Don't say whether they're in, busy, or with a patient" in flat
 
 
-def test_a_refund_is_never_promised(flat):
-    """Telling someone a charge will be reversed, and being wrong, costs trust."""
-    assert "don't promise anything will be refunded" in flat
+def test_coverage_is_never_promised(flat):
+    """Telling someone their insurance covers it, and being wrong, costs money."""
+    assert "Don't quote coverage or promise what will be paid" in flat
 
 
 def test_prompt_handles_the_awkward_times(rendered):
@@ -308,3 +308,14 @@ def test_prompt_requires_confirming_the_booking_before_closing(rendered):
     assert "Never save a booking and hang up in the same breath" in rendered
 
 
+def test_the_receptionist_is_a_woman(rendered):
+    """The persona and the default voice have to agree.
+
+    `aura-2-asteria-en` is one of Deepgram's US female voices, so a prompt
+    that left the receptionist's gender open could be written about in the
+    third person as a man by a model that never heard the voice.
+    """
+    from voice_agent.config import TTS_DEFAULT_MODELS
+
+    assert "a woman working the front desk" in rendered
+    assert TTS_DEFAULT_MODELS["deepgram"] == "aura-2-asteria-en"

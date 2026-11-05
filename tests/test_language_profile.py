@@ -178,15 +178,17 @@ def test_hinglish_examples_use_feminine_forms_only(monkeypatch):
             assert masculine not in line, line
 
 
-def test_hinglish_keeps_banking_words_in_english(monkeypatch):
-    """Nobody asks for their "khaata vivaran". Translating jargon sounds wrong."""
+def test_hinglish_keeps_clinic_words_in_english(monkeypatch):
+    """Nobody asks for a "chikitsa prativedan". Translating jargon sounds wrong."""
     guidance = _hinglish(monkeypatch).speaking_guidance
-    assert "KYC" in guidance
+    assert "appointment" in guidance
+    assert "doctor" in guidance
     assert "formal or literary Hindi" in guidance
 
 
-def test_hinglish_example_is_a_bank_call(monkeypatch):
-    """The example used to be about building a website for a restaurant."""
+def test_hinglish_example_is_a_clinic_call(monkeypatch):
+    """The example teaches the job as well as the language."""
     example = _hinglish(monkeypatch).worked_example.lower()
-    assert "kyc" in example
-    assert "website" not in example
+    assert "appointment" in example
+    assert "slot" in example
+    assert "kyc" not in example

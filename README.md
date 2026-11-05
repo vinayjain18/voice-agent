@@ -1,14 +1,5 @@
 # Voice Agent
 
-> **Branch `bank-agent`.** This branch runs the same engine as a bank service
-> desk: Hollowfield Bank, a fictional retail bank in Bandra Kurla Complex,
-> Mumbai, speaking Hinglish. It calls customers whose KYC is overdue or whose
-> account has gone dormant, explains what is needed, and books a video KYC or
-> branch slot. The clinic receptionist lives on `main`, and switching back is
-> `git checkout main` plus a rebuild. Only the business content, the prompt and
-> their tests differ; the code is the same. The rest of this README still
-> describes the clinic.
-
 A low-latency voice agent that answers a hospital's phone, holds a real
 conversation with a patient, routes them to the right department, books a real
 appointment slot, and rings them back shortly before it.
@@ -524,7 +515,7 @@ has the rest.
 
 Bulbul is trained on native scripts, so the Hinglish prompt writes the Hindi
 words in Devanagari and leaves the English words in English letters, in one
-sentence: `आपका KYC update हो गया है`. Hindi spelled out in English letters is
+sentence: `आपकी report ready हो गई है`. Hindi spelled out in English letters is
 mispronounced, which is why that rule is in the language profile rather than
 left to the model.
 
