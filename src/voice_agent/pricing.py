@@ -62,6 +62,11 @@ TTS_PRICES: dict[str, TTSPrice] = {
     # https://rumik.ai/silk-api - Rs 0.50 / 1k chars, quoted as $0.005 / 1k
     "mulberry": TTSPrice(0.005, "rumik.ai/silk-api"),
     "muga": TTSPrice(0.010, "rumik.ai/silk-api"),
+    # https://www.sarvam.ai/api-pricing - pay as you go, per 1k characters.
+    # Rs 1.00 for v4 Flash and Rs 3.00 for v3, at DEFAULT_USD_INR.
+    "bulbul:v4-flash": TTSPrice(1.00 / DEFAULT_USD_INR, "sarvam.ai/api-pricing"),
+    "bulbul:v3": TTSPrice(3.00 / DEFAULT_USD_INR, "sarvam.ai/api-pricing"),
+    "bulbul:v3-beta": TTSPrice(3.00 / DEFAULT_USD_INR, "sarvam.ai/api-pricing"),
 }
 
 

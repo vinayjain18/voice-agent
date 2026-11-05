@@ -81,6 +81,8 @@ TTS_DEFAULT_MODELS = {
     "deepgram": "aura-2-asteria-en",
     "rumik": "mulberry",
     "cartesia": "sonic-3",
+    # Bulbul v4 Flash is Sarvam's low-latency tier and a third of v3's price.
+    "sarvam": "bulbul:v4-flash",
 }
 
 # Which TTS providers/models can actually speak languages other than English.
@@ -98,6 +100,10 @@ class TTSSettings:
     rumik_description: str | None = None
     # Cartesia-only.
     cartesia_voice: str | None = None
+    # Sarvam-only. The language code is required by the API and decides how
+    # numbers and dates are read aloud, so it tracks the language profile.
+    sarvam_speaker: str | None = None
+    sarvam_language: str = "en-IN"
 
 
 @dataclass(frozen=True)
@@ -226,16 +232,22 @@ class LanguageProfile:
             )
         return (
             "You speak English and Hindi, and you are a woman, so every verb "
-            "about yourself takes the feminine form: 'bol rahi hoon', 'kar "
-            "sakti hoon', 'samajh gayi', 'dekh leti hoon'. Never 'raha hoon', "
-            "never 'sakta hoon', never 'karunga'. Getting this wrong is the "
-            "first thing an Indian caller notices.\n\n"
-            "Write Hinglish in Roman script, the way people type it to each "
-            "other. Never reply in Devanagari, and never in shuddh or formal "
-            "Hindi: 'aapka document update karna hai' is right, 'aapka "
-            "dastavez parivartan karvana hai' is not. Banking words stay in "
-            "English, the way everyone says them out loud: KYC, video call, "
-            "branch, account, document, booking, slot.\n\n"
+            "about yourself takes the feminine form: 'बोल रही हूँ', 'कर सकती "
+            "हूँ', 'समझ गई', 'देख लेती हूँ'. Never 'रहा हूँ', never 'सकता "
+            "हूँ', never 'करूँगा'. Getting this wrong is the first thing an "
+            "Indian caller notices.\n\n"
+            "Write the Hindi words in Devanagari and the English words in "
+            "English letters, mixed in one sentence the way a bilingual "
+            "person writes: 'आपका KYC update हो गया है'. Never write Hindi "
+            "in English letters: the voice is trained on Devanagari and "
+            "mispronounces Hindi spelled out in English. End sentences with a "
+            "full stop or a question mark rather than a danda, so the voice "
+            "breaks them in the right places.\n\n"
+            "Keep it everyday spoken Hindi, never formal or literary Hindi: "
+            "'आपको एक document लाना होगा' is right, 'आपको एक दस्तावेज़ "
+            "प्रस्तुत करना होगा' is not. Banking words stay in English, the "
+            "way everyone says them out loud: KYC, video call, branch, "
+            "account, document, booking, slot.\n\n"
             "Match the caller. English to them in English, Hinglish to them in "
             "Hinglish, and Hindi to them mostly in Hindi with the English "
             "words left as they are. Do not switch language because they used "
@@ -256,21 +268,21 @@ class LanguageProfile:
             )
         return (
             "Handling Hinglish, matching how they speak, as a woman:\n\n"
-            "Caller: Haan, mujhe apna KYC update karwana hai.\n"
-            "You: Bilkul, main help kar sakti hoon. Video call par karna "
-            "chahenge ya branch aana theek rahega?\n\n"
-            "Caller: Video call theek hai. Kab ka slot milega?\n"
-            "You: Kal subah dus baje khaali hai. Chalega?\n\n"
-            "Caller: Haan, chalega. Kya kya laana padega?\n"
-            "You: Ek photo ID aur address proof, dono original. Main aapka "
-            "slot book kar deti hoon, naam bata dijiye?"
+            "Caller: हाँ, मुझे अपना KYC update करवाना है.\n"
+            "You: बिलकुल, मैं help कर सकती हूँ. Video call पर करना चाहेंगे "
+            "या branch आना ठीक रहेगा?\n\n"
+            "Caller: Video call ठीक है. कब का slot मिलेगा?\n"
+            "You: कल सुबह दस बजे खाली है. चलेगा?\n\n"
+            "Caller: हाँ, चलेगा. क्या क्या लाना पड़ेगा?\n"
+            "You: एक photo ID और address proof, दोनों original. मैं आपका slot "
+            "book कर देती हूँ, नाम बता दीजिए?"
         )
 
 
 LANGUAGE_PROFILES = {
     # profile: (stt_model, stt_hints, tts_provider)
     "english": ("flux-general-en", ["en"], "deepgram"),
-    "hinglish": ("flux-general-multi", ["en", "hi"], "rumik"),
+    "hinglish": ("flux-general-multi", ["en", "hi"], "sarvam"),
 }
 
 
@@ -391,8 +403,8 @@ class Settings:
             raise ConfigError(
                 f"LANGUAGE_PROFILE={self.language.name} needs a TTS that can speak "
                 f"Hindi, but TTS_PROVIDER={self.tts.provider} is English-only "
-                f"(Deepgram Aura has no Hindi voice). Use TTS_PROVIDER=rumik, or "
-                f"set LANGUAGE_PROFILE=english."
+                f"(Deepgram Aura has no Hindi voice). Use TTS_PROVIDER=sarvam "
+                f"or rumik, or set LANGUAGE_PROFILE=english."
             )
 
     @classmethod
@@ -410,6 +422,9 @@ class Settings:
         ]
         # An explicit TTS_PROVIDER always beats the profile.
         tts_provider = _env("TTS_PROVIDER", profile_tts_provider)
+        # Sarvam reads numbers, dates and currency by this code, so a Hinglish
+        # call is hi-IN even though half the words in it are English.
+        profile_sarvam_language = "hi-IN" if profile_name == "hinglish" else "en-IN"
 
         return cls(
             stt=STTSettings(
@@ -432,6 +447,8 @@ class Settings:
                 rumik_speaker=_env("RUMIK_SPEAKER"),
                 rumik_description=_env("RUMIK_DESCRIPTION"),
                 cartesia_voice=_env("CARTESIA_VOICE"),
+                sarvam_speaker=_env("SARVAM_SPEAKER"),
+                sarvam_language=_env("SARVAM_LANGUAGE", profile_sarvam_language),
             ),
             storage=StorageSettings(
                 data_dir=Path(_env("DATA_DIR", str(PROJECT_ROOT / "data"))),
@@ -555,6 +572,7 @@ def require_api_key(provider: str) -> str:
         "deepgram": ("DEEPGRAM_API_KEY", "Get one free at https://console.deepgram.com"),
         "groq": ("GROQ_API_KEY", "Get one free at https://console.groq.com/keys"),
         "rumik": ("RUMIK_API_KEY", "Get one at https://playground.rumik.ai"),
+        "sarvam": ("SARVAM_API_KEY", "Get one at https://dashboard.sarvam.ai"),
         "cartesia": ("CARTESIA_API_KEY", "Get one at https://play.cartesia.ai"),
     }
     if provider not in keys:

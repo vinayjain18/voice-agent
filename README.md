@@ -21,7 +21,7 @@ The same code runs four ways with no changes: **your terminal**, **a browser**,
 
 ```
 Caller ──► STT ──► LLM ──►     TTS      ──► Caller
-        Deepgram   Groq   Deepgram / Rumik
+        Deepgram   Groq   Deepgram / Sarvam
           Flux
 ```
 
@@ -108,7 +108,7 @@ environment variable. Every provider is swappable the same way.
                    └────────┬────────┘                           │
                             ▼                                    │
                    ┌─────────────────┐                           │
-                   │ Deepgram/Rumik  │  text ──► speech ─────────┘
+                   │ Deepgram/Sarvam │  text ──► speech ─────────┘
                    │      (TTS)      │
                    └─────────────────┘
 ```
@@ -127,8 +127,8 @@ Silero VAD runs locally alongside, purely to detect barge-in.
 - **Python 3.13+** (uv installs it for you)
 - **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **[LiveKit CLI](https://docs.livekit.io/home/cli/)** to run the agent
-- API keys, both with free tiers: **Deepgram** and **Groq**. A **Rumik** key is
-  needed only for Hindi and Hinglish.
+- API keys, both with free tiers: **Deepgram** and **Groq**. A **Sarvam** key
+  is needed only for Hindi and Hinglish.
 - A **LiveKit Cloud** account, only for the browser, phone and WhatsApp modes.
   Terminal mode needs no LiveKit account at all.
 
@@ -164,7 +164,7 @@ Then fill in two keys:
 | `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) |
 | `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
 
-A third, `RUMIK_API_KEY` from [playground.rumik.ai](https://playground.rumik.ai),
+A third, `SARVAM_API_KEY` from [dashboard.sarvam.ai](https://dashboard.sarvam.ai),
 is needed only if you switch to Hindi or Hinglish. See
 [Language](#language).
 
@@ -414,8 +414,10 @@ their defaults; the ones you are most likely to change are below.
 | `LLM_MODEL` | `openai/gpt-oss-120b` | Any Groq-hosted model. |
 | `LLM_TEMPERATURE` | `0.4` | Higher wanders, lower repeats. |
 | `LLM_MAX_TOKENS` | `200` | Caps reply length. A voice reply should be short. |
-| `TTS_PROVIDER` | from profile | `deepgram`, `rumik` or `cartesia`. |
+| `TTS_PROVIDER` | from profile | `deepgram`, `sarvam`, `rumik` or `cartesia`. |
 | `TTS_MODEL` | `aura-2-asteria-en` | The voice. Aura-2 names carry the accent. |
+| `SARVAM_SPEAKER` | from language | Sarvam voice, used only with `TTS_PROVIDER=sarvam`. |
+| `SARVAM_LANGUAGE` | from profile | `hi-IN` or `en-IN`. How numbers and dates are read. |
 | `RUMIK_SPEAKER` | `ira` | Rumik voice preset, used only with `TTS_PROVIDER=rumik`. |
 | `TURN_DETECTION` | `auto` | `stt`, `vad`, `livekit` or `auto`. |
 | `INTERRUPTION_MODE` | `auto` | `vad` or `adaptive`. |
@@ -441,29 +443,32 @@ language instructions in the prompt, so no two of them can drift apart.
 | | `english` (default) | `hinglish` |
 | --- | --- | --- |
 | STT | `flux-general-en` | `flux-general-multi` |
-| TTS | Deepgram `aura-2-asteria-en` | Rumik `mulberry` |
-| Extra key | none | `RUMIK_API_KEY` |
+| TTS | Deepgram `aura-2-asteria-en` | Sarvam `bulbul:v4-flash` |
+| Extra key | none | `SARVAM_API_KEY` |
 | Prompt says | "You speak English" | "You speak English and Hindi" |
+| Script | English | Devanagari for the Hindi words, English letters for the rest |
 
 Switching to Hinglish is two lines:
 
 ```bash
 LANGUAGE_PROFILE=hinglish
-RUMIK_API_KEY=your-key
+SARVAM_API_KEY=your-key
 ```
 
-The profile picks Rumik on its own, so `TTS_PROVIDER` can stay unset.
+The profile picks Sarvam on its own, so `TTS_PROVIDER` can stay unset. Rumik is
+the alternative, and reads the same mixed text: `TTS_PROVIDER=rumik` with
+`RUMIK_API_KEY` set.
 
 Asking for a language the voice cannot speak is refused at startup rather than
 producing mangled audio on a live call. Deepgram's Aura voices have no Hindi at
-all, which is why the Hinglish profile switches to Rumik.
+all, which is why the Hinglish profile switches provider.
 
 ### Switching providers
 
 ```bash
 STT_PROVIDER=deepgram
 LLM_PROVIDER=groq
-TTS_PROVIDER=rumik          # or deepgram, cartesia
+TTS_PROVIDER=sarvam         # or deepgram, rumik, cartesia
 ```
 
 Every model is built in `providers/`, and nowhere else, so swapping one is a
@@ -500,11 +505,36 @@ Any Aura voice name works here, including ones newer than the list above.
 
 #### Voices for Hindi and Hinglish
 
-Aura has no Hindi voice, so `LANGUAGE_PROFILE=hinglish` switches to Rumik. Pick
-a preset:
+Aura has no Hindi voice, so `LANGUAGE_PROFILE=hinglish` switches to Sarvam
+Bulbul v4 Flash:
 
 ```bash
 LANGUAGE_PROFILE=hinglish
+SARVAM_API_KEY=your-key
+SARVAM_SPEAKER=simran_enhi_customer
+```
+
+The language is part of the voice name, written `<person>_<language>_<style>`.
+An `_enhi_` voice is trained on sentences that mix Hindi and English, which is
+what this agent speaks; an `_en_` voice reads the Hindi words as English. The
+profile picks an `_enhi_` voice on its own, so this is only worth setting to
+change who Maya sounds like. The
+[voice catalogue](https://docs.sarvam.ai/api/api-guides-tutorials/text-to-speech/voices)
+has the rest.
+
+Bulbul is trained on native scripts, so the Hinglish prompt writes the Hindi
+words in Devanagari and leaves the English words in English letters, in one
+sentence: `आपका KYC update हो गया है`. Hindi spelled out in English letters is
+mispronounced, which is why that rule is in the language profile rather than
+left to the model.
+
+#### Rumik, the alternative Hindi voice
+
+Rumik reads the same mixed text and costs about half as much per character:
+
+```bash
+LANGUAGE_PROFILE=hinglish
+TTS_PROVIDER=rumik
 RUMIK_API_KEY=your-key
 RUMIK_SPEAKER=ira           # female: emma mia sophia ava ira siya aisha zoya
                             # male:   lucas noah theo adam
@@ -526,11 +556,12 @@ over a description, so leaving both set silently ignores the description. A
 described voice is also regenerated per request and can drift between
 utterances, which is why a named preset is the default.
 
-#### All three providers
+#### All four providers
 
 | Provider | Voices | Languages |
 | --- | --- | --- |
 | `deepgram` | Aura-2, dozens of voices with named accents | English only |
+| `sarvam` | `bulbul:v4-flash`, voices named by language and style | English, Hindi, Hinglish |
 | `rumik` | `mulberry` presets, or a written description | English, Hindi, Hinglish |
 | `cartesia` | `sonic-3` | English |
 

@@ -13,7 +13,7 @@ def _clean(monkeypatch):
         "TTS_PROVIDER", "TTS_MODEL",
     ):
         monkeypatch.delenv(key, raising=False)
-    for key in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "RUMIK_API_KEY"):
+    for key in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "RUMIK_API_KEY", "SARVAM_API_KEY"):
         monkeypatch.setenv(key, "test-key")
 
 
@@ -47,13 +47,37 @@ def test_default_needs_no_rumik_key(monkeypatch):
     Settings.load().preflight()
 
 
-def test_hinglish_profile_selects_multilingual_flux_and_rumik(monkeypatch):
+def test_hinglish_profile_selects_multilingual_flux_and_sarvam(monkeypatch):
     _clean(monkeypatch)
     monkeypatch.setenv("LANGUAGE_PROFILE", "hinglish")
     s = Settings.load()
     assert s.stt.model == "flux-general-multi"
     assert s.stt.language_hints == ["en", "hi"]
-    assert s.tts.provider == "rumik"
+    assert s.tts.provider == "sarvam"
+    assert s.tts.model == "bulbul:v4-flash"
+    s.validate_language_support()
+
+
+def test_sarvam_language_code_tracks_the_profile(monkeypatch):
+    """Sarvam reads numbers, dates and currency by this code.
+
+    A Hinglish call is hi-IN even though half its words are English, because
+    the Hindi half is what the English reading gets wrong.
+    """
+    _clean(monkeypatch)
+    assert Settings.load().tts.sarvam_language == "en-IN"
+    monkeypatch.setenv("LANGUAGE_PROFILE", "hinglish")
+    assert Settings.load().tts.sarvam_language == "hi-IN"
+    monkeypatch.setenv("SARVAM_LANGUAGE", "mr-IN")
+    assert Settings.load().tts.sarvam_language == "mr-IN"
+
+
+def test_rumik_remains_available_for_hinglish(monkeypatch):
+    """Switching provider must not take the fallback voice away."""
+    _clean(monkeypatch)
+    monkeypatch.setenv("LANGUAGE_PROFILE", "hinglish")
+    monkeypatch.setenv("TTS_PROVIDER", "rumik")
+    s = Settings.load()
     assert s.tts.model == "mulberry"
     s.validate_language_support()
 
@@ -104,19 +128,31 @@ def _hinglish(monkeypatch):
     return Settings.load().language
 
 
-def test_hinglish_is_written_in_roman_script(monkeypatch):
-    """Devanagari came back as formal, bookish Hindi on a real call.
+def _has_devanagari(text: str) -> bool:
+    return any("ऀ" <= ch <= "ॿ" for ch in text)
 
-    Roman Hinglish is what people actually speak on the phone, and it keeps the
-    written turn and the spoken turn the same thing.
+
+def test_hinglish_is_written_in_mixed_script(monkeypatch):
+    """Bulbul is trained on native scripts and mispronounces romanised Hindi.
+
+    So the Hindi half of a reply is Devanagari and the English half stays in
+    English letters, which is also how a bilingual person writes it.
     """
     language = _hinglish(monkeypatch)
     guidance = language.speaking_guidance
 
-    assert "Roman" in guidance
     assert "Devanagari" in guidance
-    for example in language.worked_example.splitlines():
-        assert not any("ऀ" <= ch <= "ॿ" for ch in example), example
+    assert _has_devanagari(guidance), "the rule needs an example of the script"
+
+    spoken = [
+        line for line in language.worked_example.splitlines()
+        if line.startswith("You:")
+    ]
+    assert spoken
+    for line in spoken:
+        assert _has_devanagari(line), line
+        # The English words stay English, so every line is genuinely mixed.
+        assert any(ch.isascii() and ch.isalpha() for ch in line), line
 
 
 def test_hinglish_speaks_as_a_woman(monkeypatch):
@@ -124,9 +160,9 @@ def test_hinglish_speaks_as_a_woman(monkeypatch):
     language = _hinglish(monkeypatch)
     guidance = language.speaking_guidance
 
-    for feminine in ("rahi hoon", "sakti hoon", "gayi"):
+    for feminine in ("बोल रही हूँ", "कर सकती हूँ", "समझ गई"):
         assert feminine in guidance, feminine
-    for masculine in ("raha hoon", "sakta hoon"):
+    for masculine in ("रहा हूँ", "सकता हूँ", "करूँगा"):
         assert f"never '{masculine}'" in guidance.lower(), masculine
 
 
@@ -138,16 +174,15 @@ def test_hinglish_examples_use_feminine_forms_only(monkeypatch):
     ]
     assert spoken, "the Hinglish example teaches nothing without agent lines"
     for line in spoken:
-        lowered = line.lower()
-        for masculine in ("raha hoon", "sakta hoon", "karunga", "bataunga"):
-            assert masculine not in lowered, line
+        for masculine in ("रहा हूँ", "सकता हूँ", "करूँगा", "बताऊँगा"):
+            assert masculine not in line, line
 
 
 def test_hinglish_keeps_banking_words_in_english(monkeypatch):
     """Nobody asks for their "khaata vivaran". Translating jargon sounds wrong."""
     guidance = _hinglish(monkeypatch).speaking_guidance
     assert "KYC" in guidance
-    assert "shuddh" in guidance.lower() or "formal Hindi" in guidance
+    assert "formal or literary Hindi" in guidance
 
 
 def test_hinglish_example_is_a_bank_call(monkeypatch):

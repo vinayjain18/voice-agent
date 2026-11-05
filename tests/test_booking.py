@@ -63,24 +63,34 @@ def rendered() -> str:
     )
 
 
-def next_open_slot(days_ahead: int = 1, department: str = DEPARTMENT) -> datetime:
+def next_open_slot(nth_open_day: int = 1, department: str = DEPARTMENT) -> datetime:
     """A real slot on a department's grid, as a UTC instant.
 
     Derived rather than hardcoded so these tests keep working when the opening
     hours in profile.json change.
+
+    It counts open days rather than calendar days, because the counters are
+    shut at the weekend: asked on a Saturday, "tomorrow" and "the day after"
+    both land on Monday morning, and two calls meant to be different slots
+    come back as the same instant.
     """
     schedule = load_profile().schedule
     target = schedule.department(department)
     assert target is not None, department
 
-    day = datetime.now(UTC).date() + timedelta(days=days_ahead)
-    for _ in range(10):
+    day = datetime.now(UTC).date() + timedelta(days=1)
+    open_days = 0
+    for _ in range(30):
         slots = target.slots_on(day, hospital_tz=schedule.tz)
         future = [slot for slot in slots if slot > datetime.now(UTC) + timedelta(hours=2)]
         if future:
-            return future[0]
+            open_days += 1
+            if open_days == nth_open_day:
+                return future[0]
         day += timedelta(days=1)
-    raise AssertionError(f"{department} has no open days in the next ten")
+    raise AssertionError(
+        f"{department} has no {nth_open_day} open days in the next month"
+    )
 
 
 def local(slot: datetime) -> dict[str, str]:
@@ -1633,7 +1643,7 @@ async def test_an_explicit_timezone_beats_a_slot_we_happened_to_offer(agent, she
 @pytest.mark.asyncio
 async def test_rescheduling_onto_an_offered_slot_keeps_the_offered_time(agent, sheet):
     first = next_open_slot()
-    second = next_open_slot(days_ahead=3)
+    second = next_open_slot(nth_open_day=3)
     agent._turn += 2
 
     with patch(IDENTITY, return_value=("room-1", "+27821234567")):

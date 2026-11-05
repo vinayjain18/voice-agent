@@ -260,9 +260,9 @@
   "fraud_support": "Our fraud desk is open twenty four hours a day, every day of the year, and they can block a card or freeze an account straight away.",
   "escalation_contact": "our customer care team",
   "contact_email": "care@hollowfieldbank.example",
-  "greeting_inbound": "Hollowfield Bank se Maya bol rahi hoon. Boliye, main aapki kya help kar sakti hoon?",
-  "greeting_outbound": "Namaste, main Maya bol rahi hoon Hollowfield Bank se. Abhi baat kar sakte hain?",
-  "greeting_reminder": "Namaste, Hollowfield Bank se Maya bol rahi hoon, aapke appointment ke baare mein.",
-  "silence_check": "Hello, aap line par hain?",
-  "silence_goodbye": "Awaaz nahi aa rahi, to main call rakh deti hoon. Jab chahein wapas call kar lijiye."
+  "greeting_inbound": "Hollowfield Bank से Maya बोल रही हूँ. बोलिए, मैं आपकी क्या help कर सकती हूँ?",
+  "greeting_outbound": "नमस्ते, मैं Maya बोल रही हूँ Hollowfield Bank से. अभी बात कर सकते हैं?",
+  "greeting_reminder": "नमस्ते, Hollowfield Bank से Maya बोल रही हूँ, आपके appointment के बारे में.",
+  "silence_check": "Hello, आप line पर हैं?",
+  "silence_goodbye": "आवाज़ नहीं आ रही, तो मैं call रख देती हूँ. जब चाहें वापस call कर लीजिए."
 }

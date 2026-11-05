@@ -142,13 +142,19 @@ def test_tool_calls_log_arguments_and_result(session_and_log):
 
 
 def test_a_tool_with_no_output_is_still_logged(session_and_log):
-    """end_call returns nothing; silence here would hide the hangup."""
+    """end_call returns nothing, so the event carries no output for it.
+
+    Silence here would hide the hangup, which is the one tool call worth
+    seeing in a log.
+    """
     session, caplog = session_and_log
     session.emit(
         "function_tools_executed",
         FunctionToolsExecutedEvent(
             function_calls=[FunctionCall(call_id="2", name="end_call", arguments="{}")],
-            function_call_outputs=[None],
+            function_call_outputs=[
+                FunctionCallOutput(call_id="2", name="end_call", output="", is_error=False)
+            ],
         ),
     )
     assert "-- tool | end_call() -> (no output)" in caplog.text
@@ -162,7 +168,11 @@ def test_malformed_tool_arguments_do_not_raise(session_and_log):
             function_calls=[
                 FunctionCall(call_id="3", name="book_appointment", arguments="not json")
             ],
-            function_call_outputs=[None],
+            function_call_outputs=[
+                FunctionCallOutput(
+                    call_id="3", name="book_appointment", output="", is_error=False
+                )
+            ],
         ),
     )
     assert "book_appointment(not json)" in caplog.text
